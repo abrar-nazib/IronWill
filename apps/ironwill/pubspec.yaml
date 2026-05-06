@@ -1,0 +1,43 @@
+name: ironwill
+description: "IronWill: productivity and discipline tracker."
+publish_to: 'none'
+version: 1.0.0+1
+
+environment:
+  sdk: ^3.11.5
+
+dependencies:
+  flutter:
+    sdk: flutter
+  cupertino_icons: ^1.0.8
+  google_fonts: ^6.2.1
+  go_router: ^14.6.2
+  lucide_icons_flutter: ^3.0.5
+  intl: ^0.20.1
+
+  # Persistence
+  sqflite: ^2.4.1
+  sqflite_common_ffi: ^2.3.4
+  path: ^1.9.0
+  path_provider: ^2.1.5
+
+  # Export / import
+  share_plus: ^11.0.0
+  file_picker: ^10.1.4
+
+  # Reminders
+  flutter_local_notifications: ^19.0.0
+  flutter_foreground_task: ^9.2.2
+  permission_handler: ^12.0.0
+  timezone: ^0.10.0
+
+  # Misc
+  package_info_plus: ^8.2.0
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+  flutter_lints: ^6.0.0
+
+flutter:
+  uses-material-design: true

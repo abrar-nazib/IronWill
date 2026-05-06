@@ -1,0 +1,14 @@
+Bundled sounds in this directory are derived from the freedesktop and KDE Oxygen
+sound themes:
+
+* soft_chime.ogg     <- freedesktop stereo/bell.oga, CC-BY 3.0,
+                       Dr. Richard Boulanger et al.
+* gong.ogg           <- freedesktop stereo/alarm-clock-elapsed.oga,
+                       CC-BY-SA 3.0, Tim/corsica_s.
+* deep_bell.ogg      <- KDE Oxygen stereo/bell-window-system.ogg,
+                       CC-BY-SA 3.0.
+* singing_bowl.ogg   <- freedesktop stereo/complete.oga, CC-BY 3.0,
+                       Dr. Richard Boulanger et al.
+
+CC-BY 3.0:    https://creativecommons.org/licenses/by/3.0/
+CC-BY-SA 3.0: https://creativecommons.org/licenses/by-sa/3.0/

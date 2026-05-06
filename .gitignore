@@ -1,0 +1,7 @@
+screenshots/
+*.png
+*.jpg
+*.jpeg
+.claude/
+.env
+.venv/
