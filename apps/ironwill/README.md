@@ -1,6 +1,6 @@
-# IronWill
+# LockedIn
 
-IronWill — productivity & discipline tracker
+LockedIn — focused work and discipline tracker
 
 ## Getting Started
 

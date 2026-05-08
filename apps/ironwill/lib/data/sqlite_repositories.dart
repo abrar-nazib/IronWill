@@ -1,3 +1,5 @@
+import 'dart:convert';
+
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:lucide_icons_flutter/lucide_icons.dart';
@@ -9,6 +11,15 @@ import 'local_db.dart';
 import 'repositories.dart';
 
 const _dailyFocusFallback = 240;
+
+Map<String, Object?> _decodeMetadata(String raw) {
+  if (raw.isEmpty) return <String, Object?>{};
+  try {
+    final parsed = jsonDecode(raw);
+    if (parsed is Map) return parsed.cast<String, Object?>();
+  } catch (_) {}
+  return <String, Object?>{};
+}
 
 HabitCadence _cadenceFromString(String s) =>
     HabitCadence.values.firstWhere((c) => c.name == s, orElse: () => HabitCadence.daily);
@@ -29,6 +40,7 @@ Map<String, Object?> _habitToRow(Habit h) => {
       'id': h.id,
       'name': h.name,
       'description': h.description,
+      'metadata': jsonEncode(h.metadata),
       'cadence': h.cadence.name,
       'custom_days': h.customDays.join(','),
       'glyph_codepoint': h.glyph.codePoint,
@@ -78,6 +90,7 @@ class SqliteHabitsRepository implements HabitsRepository {
         id: id,
         name: row['name'] as String,
         description: (row['description'] as String?) ?? '',
+        metadata: _decodeMetadata((row['metadata'] as String?) ?? '{}'),
         cadence: _cadenceFromString(row['cadence'] as String),
         customDays: ((row['custom_days'] as String?) ?? '')
             .split(',')
@@ -186,6 +199,7 @@ class SqliteHabitsRepository implements HabitsRepository {
       id: id,
       name: draft.name,
       description: draft.description,
+      metadata: draft.metadata,
       cadence: draft.cadence,
       customDays: draft.customDays,
       glyph: draft.glyph,
@@ -232,11 +246,13 @@ class SqliteHabitsRepository implements HabitsRepository {
   }
 
   @override
-  Future<void> logToday(String habitId, Utilization u, {String note = ''}) =>
-      logDay(habitId, _now(), u, note: note);
+  Future<void> logToday(String habitId, Utilization u,
+          {String note = '', Map<String, Object?> metadata = const {}}) =>
+      logDay(habitId, _now(), u, note: note, metadata: metadata);
 
   @override
-  Future<void> logDay(String habitId, DateTime day, Utilization u, {String note = ''}) async {
+  Future<void> logDay(String habitId, DateTime day, Utilization u,
+      {String note = '', Map<String, Object?> metadata = const {}}) async {
     final key = iso(truncate(day));
     if (u == Utilization.none) {
       await _ldb.db.delete(
@@ -247,7 +263,13 @@ class SqliteHabitsRepository implements HabitsRepository {
     } else {
       await _ldb.db.insert(
         'habit_logs',
-        {'habit_id': habitId, 'date_iso': key, 'utilization': u.index, 'note': note},
+        {
+          'habit_id': habitId,
+          'date_iso': key,
+          'utilization': u.index,
+          'note': note,
+          'metadata': jsonEncode(metadata),
+        },
         conflictAlgorithm: ConflictAlgorithm.replace,
       );
     }
@@ -269,7 +291,30 @@ class SqliteHabitsRepository implements HabitsRepository {
       day: parseIso(r['date_iso'] as String),
       utilization: Utilization.values[r['utilization'] as int],
       note: (r['note'] as String?) ?? '',
+      metadata: _decodeMetadata((r['metadata'] as String?) ?? '{}'),
     );
+  }
+
+  /// Range query for the habit detail screen's per-field stats. Returns the
+  /// last [days] daily logs (most recent first) including their structured
+  /// metadata. Skips days with no log row.
+  Future<List<HabitLog>> recentLogs(String habitId, int days) async {
+    final today = truncate(_now());
+    final from = today.subtract(Duration(days: days - 1));
+    final rows = await _ldb.db.query(
+      'habit_logs',
+      where: 'habit_id = ? AND date_iso >= ?',
+      whereArgs: [habitId, iso(from)],
+      orderBy: 'date_iso DESC',
+    );
+    return rows
+        .map((r) => HabitLog(
+              day: parseIso(r['date_iso'] as String),
+              utilization: Utilization.values[r['utilization'] as int],
+              note: (r['note'] as String?) ?? '',
+              metadata: _decodeMetadata((r['metadata'] as String?) ?? '{}'),
+            ))
+        .toList();
   }
 }
 
@@ -352,74 +397,158 @@ class SqliteTimeRepository implements TimeRepository {
   }
 }
 
-class SqliteFocusSessionsRepository implements FocusSessionsRepository {
+class SqliteSubjectsRepository implements SubjectsRepository {
   final LocalDb _ldb;
-  final ValueNotifier<List<FocusSession>> _all = ValueNotifier<List<FocusSession>>([]);
-  SqliteFocusSessionsRepository(this._ldb) {
+  final ValueNotifier<List<Subject>> _all = ValueNotifier<List<Subject>>([]);
+  SqliteSubjectsRepository(this._ldb) {
     _refresh();
   }
 
   Future<void> _refresh() async {
-    final rows = await _ldb.db.query('focus_sessions', orderBy: 'start_hour, start_minute');
-    _all.value = rows
-        .map((r) => FocusSession(
+    final subjectRows = await _ldb.db.query('subjects', orderBy: 'ord ASC');
+    final blockRows = await _ldb.db.query('subject_blocks',
+        orderBy: 'day_of_week ASC, start_hour ASC, start_minute ASC');
+    final blocksBySubject = <String, List<SubjectBlock>>{};
+    for (final br in blockRows) {
+      final sid = br['subject_id'] as String;
+      blocksBySubject.putIfAbsent(sid, () => <SubjectBlock>[]).add(SubjectBlock(
+            id: br['id'] as String,
+            subjectId: sid,
+            dayOfWeek: br['day_of_week'] as int,
+            start: TimeOfDay(
+                hour: br['start_hour'] as int, minute: br['start_minute'] as int),
+            end: TimeOfDay(
+                hour: br['end_hour'] as int, minute: br['end_minute'] as int),
+            pomodoroEnabled: (br['pomodoro_enabled'] as int) == 1,
+            pomodoroPercent: br['pomodoro_percent'] as int,
+          ));
+    }
+    _all.value = subjectRows
+        .map((r) => Subject(
               id: r['id'] as String,
               name: r['name'] as String,
-              start: TimeOfDay(hour: r['start_hour'] as int, minute: r['start_minute'] as int),
-              end: TimeOfDay(hour: r['end_hour'] as int, minute: r['end_minute'] as int),
-              daysOfWeek: ((r['days_csv'] as String?) ?? '')
-                  .split(',')
-                  .where((s) => s.isNotEmpty)
-                  .map(int.parse)
-                  .toList(),
-              quarters: List.filled(0, Utilization.none),
+              expiresAt: parseIso(r['expires_at'] as String),
+              createdAt: DateTime.fromMillisecondsSinceEpoch(r['created_at'] as int),
+              order: r['ord'] as int,
+              blocks: blocksBySubject[r['id'] as String] ?? const [],
             ))
         .toList();
   }
 
   @override
-  ValueListenable<List<FocusSession>> get all => _all;
+  ValueListenable<List<Subject>> get all => _all;
   @override
-  Future<List<FocusSession>> listAll() async => _all.value;
+  Future<List<Subject>> listAll() async => _all.value;
   @override
-  Future<FocusSession?> getById(String id) async {
+  Future<Subject?> getById(String id) async {
     try { return _all.value.firstWhere((s) => s.id == id); } catch (_) { return null; }
   }
 
   @override
-  Future<FocusSession> create(FocusSessionDraft draft) async {
-    final id = 's${DateTime.now().microsecondsSinceEpoch}';
-    await _ldb.db.insert('focus_sessions', {
-      'id': id,
-      'name': draft.name,
-      'start_hour': draft.start.hour,
-      'start_minute': draft.start.minute,
-      'end_hour': draft.end.hour,
-      'end_minute': draft.end.minute,
-      'days_csv': draft.daysOfWeek.join(','),
+  Future<Subject> create(SubjectDraft draft) async {
+    final id = 'subj_${DateTime.now().microsecondsSinceEpoch}';
+    final orderRow = await _ldb.db.rawQuery('SELECT MAX(ord) AS m FROM subjects');
+    final nextOrd = ((orderRow.first['m'] as int?) ?? -1) + 1;
+    final nowMs = DateTime.now().millisecondsSinceEpoch;
+    await _ldb.db.transaction((txn) async {
+      await txn.insert('subjects', {
+        'id': id,
+        'name': draft.name.trim(),
+        'expires_at': iso(draft.expiresAt),
+        'created_at': nowMs,
+        'ord': nextOrd,
+      });
+      for (var i = 0; i < draft.blocks.length; i++) {
+        final b = draft.blocks[i];
+        await txn.insert('subject_blocks', {
+          'id': 'blk_${nowMs}_${i}_${b.dayOfWeek}',
+          'subject_id': id,
+          'day_of_week': b.dayOfWeek,
+          'start_hour': b.start.hour,
+          'start_minute': b.start.minute,
+          'end_hour': b.end.hour,
+          'end_minute': b.end.minute,
+          'pomodoro_enabled': b.pomodoroEnabled ? 1 : 0,
+          'pomodoro_percent': b.pomodoroPercent,
+        });
+      }
     });
     await _refresh();
     return _all.value.firstWhere((s) => s.id == id);
   }
 
   @override
-  Future<FocusSession> update(FocusSession s) async {
-    await _ldb.db.update('focus_sessions', {
-      'name': s.name,
-      'start_hour': s.start.hour,
-      'start_minute': s.start.minute,
-      'end_hour': s.end.hour,
-      'end_minute': s.end.minute,
-      'days_csv': s.daysOfWeek.join(','),
+  Future<Subject> update(Subject s) async {
+    await _ldb.db.update('subjects', {
+      'name': s.name.trim(),
+      'expires_at': iso(s.expiresAt),
+      'ord': s.order,
     }, where: 'id = ?', whereArgs: [s.id]);
     await _refresh();
-    return s;
+    return _all.value.firstWhere((x) => x.id == s.id);
   }
 
   @override
   Future<void> delete(String id) async {
-    await _ldb.db.delete('focus_sessions', where: 'id = ?', whereArgs: [id]);
+    // ON DELETE CASCADE on subject_blocks handles the children.
+    await _ldb.db.delete('subjects', where: 'id = ?', whereArgs: [id]);
     await _refresh();
+  }
+
+  @override
+  Future<SubjectBlock> addBlock(String subjectId, SubjectBlockDraft draft) async {
+    final nowMs = DateTime.now().microsecondsSinceEpoch;
+    final id = 'blk_${nowMs}_${draft.dayOfWeek}';
+    await _ldb.db.insert('subject_blocks', {
+      'id': id,
+      'subject_id': subjectId,
+      'day_of_week': draft.dayOfWeek,
+      'start_hour': draft.start.hour,
+      'start_minute': draft.start.minute,
+      'end_hour': draft.end.hour,
+      'end_minute': draft.end.minute,
+      'pomodoro_enabled': draft.pomodoroEnabled ? 1 : 0,
+      'pomodoro_percent': draft.pomodoroPercent,
+    });
+    await _refresh();
+    return _all.value
+        .firstWhere((s) => s.id == subjectId)
+        .blocks
+        .firstWhere((b) => b.id == id);
+  }
+
+  @override
+  Future<SubjectBlock> updateBlock(SubjectBlock block) async {
+    await _ldb.db.update('subject_blocks', {
+      'day_of_week': block.dayOfWeek,
+      'start_hour': block.start.hour,
+      'start_minute': block.start.minute,
+      'end_hour': block.end.hour,
+      'end_minute': block.end.minute,
+      'pomodoro_enabled': block.pomodoroEnabled ? 1 : 0,
+      'pomodoro_percent': block.pomodoroPercent,
+    }, where: 'id = ?', whereArgs: [block.id]);
+    await _refresh();
+    return block;
+  }
+
+  @override
+  Future<void> deleteBlock(String blockId) async {
+    await _ldb.db.delete('subject_blocks', where: 'id = ?', whereArgs: [blockId]);
+    await _refresh();
+  }
+
+  @override
+  Future<Subject> repeatNextWeek(String subjectId) async {
+    final s = await getById(subjectId);
+    if (s == null) throw StateError('Subject $subjectId not found');
+    final today = DateTime.now();
+    final todayDate = DateTime(today.year, today.month, today.day);
+    // If already-expired, set the new expiry relative to today; otherwise extend
+    // from the current expiry so consecutive presses stack cleanly.
+    final base = s.expiresAt.isBefore(todayDate) ? todayDate : s.expiresAt;
+    final extended = base.add(Duration(days: LocalDb.defaultExpiryDays));
+    return update(s.copyWith(expiresAt: extended));
   }
 }
 
@@ -442,7 +571,7 @@ class SqliteStatsRepository implements StatsRepository {
 
   Future<void> _recomputeStreak() async {
     final p = await _profile.get();
-    _focusStreakDays.value = await _focusStreak(p.dailyFocusMinutesTarget);
+    _focusStreakDays.value = await _focusStreak(p);
   }
 
   @override
@@ -457,21 +586,30 @@ class SqliteStatsRepository implements StatsRepository {
       return t == Utilization.full || t == Utilization.good;
     }).length;
     final profile = await _profile.get();
+    final todaysTarget = profile.targetForToday(_now());
     return DashboardStats(
       focusMinutesToday: today.focusedMinutes,
-      dailyFocusTarget: profile.dailyFocusMinutesTarget,
-      focusStreakDays: await _focusStreak(profile.dailyFocusMinutesTarget),
+      dailyFocusTarget: todaysTarget,
+      focusStreakDays: await _focusStreak(profile),
       habitsDueToday: habits.length,
       habitsCompletedToday: completed,
     );
   }
 
-  Future<int> _focusStreak(int target) async {
+  /// Walk back from today, comparing each day's focused minutes to that
+  /// weekday's target. A 0-target day (rest day) auto-passes; the streak
+  /// continues across it.
+  Future<int> _focusStreak(UserProfile profile) async {
     final today = truncate(_now());
     int streak = 0;
     for (int back = 0; back < 365; back++) {
       final d = today.subtract(Duration(days: back));
       final day = await _time.getDay(d);
+      final target = profile.targetForWeekday(d.weekday);
+      if (target == 0) {
+        // Rest day: doesn't break the streak, doesn't add to it either.
+        continue;
+      }
       if (back == 0 && day.focusedMinutes < target) {
         // skip today if we have not earned it yet
         continue;
@@ -520,9 +658,12 @@ class SqliteProfileRepository implements ProfileRepository {
     final rows = await _ldb.db.query('profile', where: 'id = ?', whereArgs: [1]);
     if (rows.isEmpty) return;
     final r = rows.first;
+    final csv = r['weekly_focus_minutes_csv'] as String? ?? LocalDb.defaultWeeklyFocusCsv;
+    final daily =
+        r['daily_focus_minutes_target'] as int? ?? _dailyFocusFallback;
     _state.value = UserProfile(
       name: r['name'] as String,
-      dailyFocusMinutesTarget: r['daily_focus_minutes_target'] as int? ?? _dailyFocusFallback,
+      weeklyFocusMinutes: _parseWeeklyCsv(csv, fallback: daily),
       focusStreakDays: r['focus_streak_days'] as int? ?? 0,
       avatarLetter: r['avatar_letter'] as String?,
       timezone: r['timezone'] as String? ?? 'Local',
@@ -537,15 +678,34 @@ class SqliteProfileRepository implements ProfileRepository {
 
   @override
   Future<void> update(UserProfile p) async {
+    final csv = p.weeklyFocusMinutes.length == 7
+        ? p.weeklyFocusMinutes.join(',')
+        : LocalDb.defaultWeeklyFocusCsv;
+    // Keep the legacy `daily_focus_minutes_target` column populated as the
+    // max of the weekly schedule. It's no longer the source of truth, but old
+    // exports / external readers may still inspect it.
+    final legacyDaily = p.weeklyFocusMinutes.fold<int>(0, (a, b) => a > b ? a : b);
     await _ldb.db.update('profile', {
       'name': p.name,
-      'daily_focus_minutes_target': p.dailyFocusMinutesTarget,
+      'weekly_focus_minutes_csv': csv,
+      'daily_focus_minutes_target': legacyDaily == 0 ? _dailyFocusFallback : legacyDaily,
       'focus_streak_days': p.focusStreakDays,
       'avatar_letter': p.avatarLetter,
       'timezone': p.timezone,
     }, where: 'id = ?', whereArgs: [1]);
     await _refresh();
   }
+}
+
+/// Parse the `weekly_focus_minutes_csv` column. Falls back to a 7-element
+/// list of [fallback] minutes if the CSV is malformed (e.g. legacy export
+/// shape that didn't include the column at all).
+List<int> _parseWeeklyCsv(String csv, {required int fallback}) {
+  final parts = csv.split(',').map((s) => int.tryParse(s.trim()) ?? -1).toList();
+  if (parts.length != 7 || parts.any((v) => v < 0)) {
+    return List<int>.filled(7, fallback);
+  }
+  return parts.map((v) => v.clamp(0, 1440)).toList();
 }
 
 class SqliteSettingsRepository implements SettingsRepository {
@@ -568,6 +728,9 @@ class SqliteSettingsRepository implements SettingsRepository {
       privacyLockOn: ((r['privacy_lock_on'] as int?) ?? 0) == 1,
       themeMode: _themeFromString(r['theme_mode'] as String? ?? 'system'),
       onboarded: ((r['onboarded'] as int?) ?? 0) == 1,
+      blockSizeMinutes: r['block_size_minutes'] as int? ?? 30,
+      pomodoroEnabled: ((r['pomodoro_enabled'] as int?) ?? 0) == 1,
+      pomodoroPercent: r['pomodoro_percent'] as int? ?? 15,
     );
   }
 
@@ -587,6 +750,9 @@ class SqliteSettingsRepository implements SettingsRepository {
       'privacy_lock_on': s.privacyLockOn ? 1 : 0,
       'theme_mode': s.themeMode.name,
       'onboarded': s.onboarded ? 1 : 0,
+      'block_size_minutes': s.blockSizeMinutes,
+      'pomodoro_enabled': s.pomodoroEnabled ? 1 : 0,
+      'pomodoro_percent': s.pomodoroPercent,
     }, where: 'id = ?', whereArgs: [1]);
     await _refresh();
   }

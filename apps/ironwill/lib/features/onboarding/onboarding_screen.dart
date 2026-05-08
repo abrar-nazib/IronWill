@@ -8,7 +8,7 @@ import '../../theme/tokens.dart';
 import '../../theme/typography.dart';
 import '../../widgets/app_card.dart';
 import '../habits/habit_edit_sheet.dart';
-import '../sessions/session_edit_sheet.dart';
+import '../subjects/subject_edit_sheet.dart';
 
 class OnboardingScreen extends StatefulWidget {
   const OnboardingScreen({super.key});
@@ -36,9 +36,11 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
     final firstLetter = _name.text.trim().isNotEmpty
         ? _name.text.trim().substring(0, 1).toUpperCase()
         : null;
+    // Onboarding picks one daily target and seeds all 7 weekdays from it.
+    // The user can break out per-day later in Settings → Focus targets.
     await svc.profile.update(p.copyWith(
       name: _name.text.trim().isEmpty ? p.name : _name.text.trim(),
-      dailyFocusMinutesTarget: _focusTarget,
+      weeklyFocusMinutes: List<int>.filled(7, _focusTarget),
       avatarLetter: firstLetter ?? p.avatarLetter,
     ));
     await svc.settings.update(s.copyWith(
@@ -66,7 +68,7 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
               padding: const EdgeInsets.fromLTRB(Sp.md, Sp.s, Sp.md, 0),
               child: Row(
                 children: [
-                  Text('IRONWILL',
+                  Text('LOCKEDIN',
                       style: AppText.section.copyWith(color: t.inkMuted, letterSpacing: 2.4)),
                   const Spacer(),
                   TextButton(onPressed: _skipAll, child: const Text('Skip setup')),
@@ -131,7 +133,7 @@ class _Welcome extends StatelessWidget {
               style: AppText.headline.copyWith(color: t.ink, fontSize: 32, height: 1.15)),
           const SizedBox(height: Sp.md),
           Text(
-            'IronWill tracks two things: how much of each focus block you actually used, and which habits you held the line on. Everything stays on this device. You can export your data any time.',
+            'LockedIn tracks two things: how much of each focus block you actually used, and which habits you held the line on. Everything stays on this device. You can export your data any time.',
             style: AppText.body.copyWith(color: t.inkMuted, fontSize: 16),
           ),
           const SizedBox(height: Sp.x3l),
@@ -186,7 +188,7 @@ class _NamePage extends StatelessWidget {
   }
 }
 
-class _FocusTargetPage extends StatelessWidget {
+class _FocusTargetPage extends StatefulWidget {
   final int target;
   final ValueChanged<int> onChange;
   final VoidCallback onNext;
@@ -197,9 +199,43 @@ class _FocusTargetPage extends StatelessWidget {
   });
 
   @override
+  State<_FocusTargetPage> createState() => _FocusTargetPageState();
+}
+
+class _FocusTargetPageState extends State<_FocusTargetPage> {
+  late final TextEditingController _ctl;
+
+  @override
+  void initState() {
+    super.initState();
+    _ctl = TextEditingController(text: widget.target.toString());
+  }
+
+  @override
+  void dispose() {
+    _ctl.dispose();
+    super.dispose();
+  }
+
+  void _commit(int v) {
+    final clamped = v.clamp(0, 1440);
+    widget.onChange(clamped);
+    if (int.tryParse(_ctl.text) != clamped) {
+      _ctl.text = clamped.toString();
+    }
+  }
+
+  String _hours(int mins) {
+    final h = mins ~/ 60;
+    final m = mins % 60;
+    if (h == 0) return '${m}m';
+    if (m == 0) return '${h}h';
+    return '${h}h ${m}m';
+  }
+
+  @override
   Widget build(BuildContext context) {
     final t = context.tokens;
-    final options = const [60, 120, 180, 240, 300, 360, 480];
     return _OnboardingPage(
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
@@ -210,7 +246,7 @@ class _FocusTargetPage extends StatelessWidget {
               style: AppText.headline.copyWith(color: t.ink, fontSize: 26, height: 1.2)),
           const SizedBox(height: Sp.m),
           Text(
-            "We use this as the daily floor for your focus streak. Pick something hard but truthful.",
+            "We'll use this as the daily floor for your focus streak. Type any number from 0 to 1440 (24 hours). You can break it out per weekday later in Settings.",
             style: AppText.body.copyWith(color: t.inkMuted),
           ),
           const SizedBox(height: Sp.lg),
@@ -219,45 +255,48 @@ class _FocusTargetPage extends StatelessWidget {
             stroked: false,
             padding: const EdgeInsets.all(Sp.lg),
             child: Row(
-              crossAxisAlignment: CrossAxisAlignment.end,
               children: [
-                Text('$target', style: AppText.big.copyWith(color: t.bg, fontSize: 56)),
-                const SizedBox(width: Sp.s),
-                Padding(
-                  padding: const EdgeInsets.only(bottom: Sp.s),
-                  child: Text('min',
-                      style: AppText.title.copyWith(color: t.bg.withValues(alpha: 0.6))),
+                IconButton(
+                  icon: Icon(LucideIcons.minus, color: t.bg),
+                  onPressed: () => _commit(widget.target - 15),
+                  tooltip: '-15 min',
+                ),
+                Expanded(
+                  child: TextField(
+                    controller: _ctl,
+                    textAlign: TextAlign.center,
+                    keyboardType: TextInputType.number,
+                    style: AppText.big.copyWith(color: t.bg, fontSize: 48),
+                    decoration: InputDecoration(
+                      isDense: true,
+                      border: InputBorder.none,
+                      hintText: '240',
+                      hintStyle: AppText.big.copyWith(
+                        color: t.bg.withValues(alpha: 0.3),
+                        fontSize: 48,
+                      ),
+                    ),
+                    onChanged: (raw) {
+                      final n = int.tryParse(raw);
+                      if (n != null) _commit(n);
+                    },
+                  ),
+                ),
+                IconButton(
+                  icon: Icon(LucideIcons.plus, color: t.bg),
+                  onPressed: () => _commit(widget.target + 15),
+                  tooltip: '+15 min',
                 ),
               ],
             ),
           ),
-          const SizedBox(height: Sp.md),
-          Wrap(
-            spacing: Sp.s,
-            runSpacing: Sp.s,
-            children: [
-              for (final m in options)
-                GestureDetector(
-                  onTap: () => onChange(m),
-                  child: Container(
-                    padding: const EdgeInsets.symmetric(horizontal: Sp.md, vertical: Sp.s),
-                    decoration: BoxDecoration(
-                      color: m == target ? t.ink : t.surfaceAlt,
-                      borderRadius: BorderRadius.circular(R.s),
-                      border: Border.all(color: t.divider),
-                    ),
-                    child: Text('$m min',
-                        style: AppText.bodyStrong.copyWith(
-                          color: m == target ? t.bg : t.ink,
-                        )),
-                  ),
-                ),
-            ],
-          ),
+          const SizedBox(height: Sp.s),
+          Text('= ${_hours(widget.target)} per day',
+              style: AppText.label.copyWith(color: t.inkMuted)),
           const Spacer(),
           SizedBox(
             width: double.infinity,
-            child: ElevatedButton(onPressed: onNext, child: const Text('Continue')),
+            child: ElevatedButton(onPressed: widget.onNext, child: const Text('Continue')),
           ),
         ],
       ),
@@ -371,36 +410,38 @@ class _FirstSessionPage extends StatelessWidget {
         children: [
           Text('STEP 4 / 4', style: AppText.section.copyWith(color: t.inkMuted)),
           const SizedBox(height: Sp.s),
-          Text('Schedule a focus session.',
+          Text('Pick your first subject.',
               style: AppText.headline.copyWith(color: t.ink, fontSize: 26)),
           const SizedBox(height: Sp.m),
           Text(
-            "While a focus session is running you'll get a soft alarm at every 15 minute mark to log how the quarter actually went. Two hours of true focus per day beats six hours of pretending.",
+            "A subject is what you're locking in on (Math, Workout, a side project). It runs on a weekly schedule and you log your focus inside each block. You can add more later.",
             style: AppText.body.copyWith(color: t.inkMuted),
           ),
           const SizedBox(height: Sp.lg),
           OutlinedButton.icon(
-            onPressed: () => showSessionEditSheet(context),
+            onPressed: () => showSubjectEditSheet(context),
             icon: const Icon(LucideIcons.plus),
-            label: const Text('Add a session'),
+            label: const Text('Add a subject'),
           ),
           const SizedBox(height: Sp.md),
           Expanded(
-            child: ValueListenableBuilder<List<FocusSession>>(
-              valueListenable: svc.sessions.all,
-              builder: (_, sessions, __) {
-                if (sessions.isEmpty) {
+            child: ValueListenableBuilder<List<Subject>>(
+              valueListenable: svc.subjects.all,
+              builder: (_, subjects, __) {
+                if (subjects.isEmpty) {
                   return const SizedBox.shrink();
                 }
                 return ListView.separated(
-                  itemCount: sessions.length,
+                  itemCount: subjects.length,
                   separatorBuilder: (_, __) => const SizedBox(height: Sp.s),
                   itemBuilder: (_, i) {
-                    final s = sessions[i];
-                    final timeLabel =
-                        '${s.start.hour.toString().padLeft(2, '0')}:${s.start.minute.toString().padLeft(2, '0')} to ${s.end.hour.toString().padLeft(2, '0')}:${s.end.minute.toString().padLeft(2, '0')}';
+                    final s = subjects[i];
+                    final blockCount = s.blocks.length;
+                    final summary = blockCount == 0
+                        ? 'No blocks scheduled yet'
+                        : '$blockCount block${blockCount == 1 ? '' : 's'} this week';
                     return AppCard(
-                      onTap: () => showSessionEditSheet(context, existing: s),
+                      onTap: () => showSubjectEditSheet(context, existing: s),
                       padding: const EdgeInsets.all(Sp.m),
                       child: Row(
                         children: [
@@ -420,7 +461,7 @@ class _FirstSessionPage extends StatelessWidget {
                               crossAxisAlignment: CrossAxisAlignment.start,
                               children: [
                                 Text(s.name, style: AppText.bodyStrong.copyWith(color: t.ink)),
-                                Text(timeLabel, style: AppText.label.copyWith(color: t.inkMuted)),
+                                Text(summary, style: AppText.label.copyWith(color: t.inkMuted)),
                               ],
                             ),
                           ),
@@ -453,9 +494,19 @@ class _OnboardingPage extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return Padding(
-      padding: const EdgeInsets.fromLTRB(Sp.md, Sp.x3l, Sp.md, Sp.x3l),
-      child: child,
+    // Wrap in a scroll view that respects the available height. When the
+    // keyboard opens (e.g. on the name-input page), content can scroll
+    // instead of overflowing by `bottom overflowed by N pixels`.
+    return LayoutBuilder(
+      builder: (_, constraints) => SingleChildScrollView(
+        padding: const EdgeInsets.fromLTRB(Sp.md, Sp.x3l, Sp.md, Sp.x3l),
+        child: ConstrainedBox(
+          constraints: BoxConstraints(
+            minHeight: constraints.maxHeight - Sp.x3l * 2,
+          ),
+          child: IntrinsicHeight(child: child),
+        ),
+      ),
     );
   }
 }

@@ -86,8 +86,12 @@ GoRouter buildRouter(AppServices services) {
             builder: (c, s) => const PrivacyLockScreen(),
           ),
           GoRoute(
-            path: 'sessions',
-            builder: (c, s) => const FocusSessionsScreen(),
+            path: 'subjects',
+            builder: (c, s) => const SubjectsScreen(),
+          ),
+          GoRoute(
+            path: 'pomodoro',
+            builder: (c, s) => const PomodoroSettingsScreen(),
           ),
         ],
       ),

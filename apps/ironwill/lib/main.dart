@@ -37,25 +37,25 @@ void main() async {
     FocusSessionForegroundController.init();
     await services.notifications.rescheduleAll(
       habits: services.habits.all.value,
-      sessions: services.sessions.all.value,
+      subjects: services.subjects.all.value,
       settings: services.settings.settings.value,
     );
-    await FocusSessionForegroundController.reconcile(services.sessions.all.value);
+    await FocusSessionForegroundController.reconcile(services.subjects.all.value);
   }
 
-  runApp(IronWillApp(services: services, launchPayload: launchPayload));
+  runApp(LockedInApp(services: services, launchPayload: launchPayload));
 }
 
-class IronWillApp extends StatefulWidget {
+class LockedInApp extends StatefulWidget {
   final AppServices services;
   final String? launchPayload;
-  const IronWillApp({super.key, required this.services, this.launchPayload});
+  const LockedInApp({super.key, required this.services, this.launchPayload});
 
   @override
-  State<IronWillApp> createState() => _IronWillAppState();
+  State<LockedInApp> createState() => _LockedInAppState();
 }
 
-class _IronWillAppState extends State<IronWillApp> with WidgetsBindingObserver {
+class _LockedInAppState extends State<LockedInApp> with WidgetsBindingObserver {
   late final _router = buildRouter(widget.services);
   StreamSubscription<String>? _notifSub;
   Timer? _reconcileTicker;
@@ -77,7 +77,7 @@ class _IronWillAppState extends State<IronWillApp> with WidgetsBindingObserver {
       // user re-opens the app or saves a session/habit.
       _reconcileTicker = Timer.periodic(const Duration(seconds: 30), (_) {
         FocusSessionForegroundController.reconcile(
-          widget.services.sessions.all.value,
+          widget.services.subjects.all.value,
         );
       });
     }
@@ -114,10 +114,10 @@ class _IronWillAppState extends State<IronWillApp> with WidgetsBindingObserver {
     if (state == AppLifecycleState.resumed) {
       widget.services.notifications.rescheduleAll(
         habits: widget.services.habits.all.value,
-        sessions: widget.services.sessions.all.value,
+        subjects: widget.services.subjects.all.value,
         settings: widget.services.settings.settings.value,
       );
-      FocusSessionForegroundController.reconcile(widget.services.sessions.all.value);
+      FocusSessionForegroundController.reconcile(widget.services.subjects.all.value);
     }
   }
 
@@ -134,7 +134,7 @@ class _IronWillAppState extends State<IronWillApp> with WidgetsBindingObserver {
               settings.copyWith(themeMode: themeModeToChoice(m)),
             ),
             child: MaterialApp.router(
-              title: 'IronWill',
+              title: 'LockedIn',
               debugShowCheckedModeBanner: false,
               theme: buildTheme(brightness: Brightness.light),
               darkTheme: buildTheme(brightness: Brightness.dark),

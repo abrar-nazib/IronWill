@@ -6,7 +6,7 @@ plugins {
 }
 
 android {
-    namespace = "com.cortextech.manup.manup"
+    namespace = "com.cortextech.lockedin"
     compileSdk = flutter.compileSdkVersion
     ndkVersion = flutter.ndkVersion
 
@@ -21,7 +21,7 @@ android {
     }
 
     defaultConfig {
-        applicationId = "com.cortextech.manup"
+        applicationId = "com.cortextech.lockedin"
         minSdk = flutter.minSdkVersion
         targetSdk = flutter.targetSdkVersion
         versionCode = flutter.versionCode
@@ -41,7 +41,7 @@ android {
     applicationVariants.all {
         outputs.all {
             val output = this as com.android.build.gradle.internal.api.BaseVariantOutputImpl
-            output.outputFileName = "IronWill-${buildType.name}.apk"
+            output.outputFileName = "LockedIn-${buildType.name}.apk"
         }
     }
 }

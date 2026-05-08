@@ -126,7 +126,7 @@ class _HeroFocusCard extends StatelessWidget {
         valueListenable: svc.profile.profile,
         builder: (_, p, __) {
           final focusMin = day.focusedMinutes;
-          final target = p.dailyFocusMinutesTarget;
+          final target = p.targetForToday();
           final pct = (focusMin / target).clamp(0.0, 1.0);
           return AppCard(
             color: t.ink,
@@ -209,16 +209,27 @@ class _StreakCard extends StatelessWidget {
 
 Future<void> _logCurrentQuarter(BuildContext context) async {
   final svc = AppServices.of(context);
-  final picked = await const SmartQuarterPicker().pick(context);
+  final size = svc.settings.settings.value.blockSizeMinutes;
+  final stride = size == 60 ? 4 : (size == 30 ? 2 : 1);
+  final picked = await SmartQuarterPicker(blockSizeMinutes: size).pick(context);
   if (picked == null || !context.mounted) return;
   final today = svc.time.today.value;
+  final aggregated = aggregateQuartersInBlock(
+    quarters: today.quarters,
+    firstQuarterIndex: picked,
+    stride: stride,
+  );
   final result = await showLogBlockSheet(
     context,
-    current: today.quarters[picked],
+    current: aggregated,
     quarterIndex: picked,
   );
   if (result == null || !context.mounted) return;
-  await svc.time.logQuarter(today.date, picked, result);
+  for (var i = 0; i < stride; i++) {
+    final idx = picked + i;
+    if (idx >= 96) break;
+    await svc.time.logQuarter(today.date, idx, result);
+  }
 }
 
 /// The "you can log here" tray. Most prominent action on the home screen so
@@ -226,32 +237,45 @@ Future<void> _logCurrentQuarter(BuildContext context) async {
 class _LogTrayCard extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
+    final svc = AppServices.of(context);
     return AppCard(
       padding: const EdgeInsets.all(Sp.md),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           const SectionHeader('Log now'),
-          Row(
-            children: [
-              Expanded(
-                child: _BigAction(
-                  icon: LucideIcons.bellRing,
-                  title: 'Log this quarter',
-                  subtitle: 'Last 15 minutes of focus',
-                  onTap: () => _logCurrentQuarter(context),
-                ),
-              ),
-              const SizedBox(width: Sp.s),
-              Expanded(
-                child: _BigAction(
-                  icon: LucideIcons.checkCheck,
-                  title: 'Log a habit',
-                  subtitle: 'Mark today\'s status',
-                  onTap: () => context.go('/habits'),
-                ),
-              ),
-            ],
+          ValueListenableBuilder<AppSettings>(
+            valueListenable: svc.settings.settings,
+            builder: (_, settings, __) {
+              final size = settings.blockSizeMinutes;
+              final title = size == 60
+                  ? 'Log this hour'
+                  : (size == 30 ? 'Log this 30 min' : 'Log this quarter');
+              final subtitle = size == 60
+                  ? 'Last hour of focus'
+                  : 'Last $size minutes of focus';
+              return Row(
+                children: [
+                  Expanded(
+                    child: _BigAction(
+                      icon: LucideIcons.bellRing,
+                      title: title,
+                      subtitle: subtitle,
+                      onTap: () => _logCurrentQuarter(context),
+                    ),
+                  ),
+                  const SizedBox(width: Sp.s),
+                  Expanded(
+                    child: _BigAction(
+                      icon: LucideIcons.checkCheck,
+                      title: 'Log a habit',
+                      subtitle: 'Mark today\'s status',
+                      onTap: () => context.go('/habits'),
+                    ),
+                  ),
+                ],
+              );
+            },
           ),
           const SizedBox(height: Sp.s),
           Row(
@@ -267,8 +291,8 @@ class _LogTrayCard extends StatelessWidget {
               Expanded(
                 child: OutlinedButton.icon(
                   icon: const Icon(LucideIcons.calendarPlus),
-                  label: const Text('Add session'),
-                  onPressed: () => context.push('/settings/sessions'),
+                  label: const Text('Add subject'),
+                  onPressed: () => context.push('/settings/subjects'),
                 ),
               ),
             ],
@@ -329,10 +353,11 @@ class _UpNextCard extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final t = context.tokens;
-    return ValueListenableBuilder<List<FocusSession>>(
-      valueListenable: AppServices.of(context).sessions.all,
-      builder: (_, sessions, __) {
-        if (sessions.isEmpty) {
+    return ValueListenableBuilder<List<Subject>>(
+      valueListenable: AppServices.of(context).subjects.all,
+      builder: (_, subjects, __) {
+        final upcoming = _nextUpcomingBlock(subjects, DateTime.now());
+        if (upcoming == null) {
           return AppCard(
             padding: const EdgeInsets.all(Sp.md),
             onTap: () => context.go('/time'),
@@ -357,9 +382,9 @@ class _UpNextCard extends StatelessWidget {
                       Text('UP NEXT',
                           style: Theme.of(context).textTheme.labelSmall?.copyWith(color: t.inkMuted)),
                       const SizedBox(height: 2),
-                      Text('No focus sessions', style: AppText.title.copyWith(color: t.ink)),
+                      Text('No subjects scheduled', style: AppText.title.copyWith(color: t.ink)),
                       const SizedBox(height: 2),
-                      Text('Schedule one in Settings to fill your day.',
+                      Text('Add a subject in Settings to fill your week.',
                           style: AppText.label.copyWith(color: t.inkMuted)),
                     ],
                   ),
@@ -369,12 +394,10 @@ class _UpNextCard extends StatelessWidget {
             ),
           );
         }
-        final next = sessions.firstWhere(
-          (s) => s.quarters.contains(Utilization.none),
-          orElse: () => sessions.last,
-        );
+        final block = upcoming.block;
         final timeLabel =
-            '${next.start.hour.toString().padLeft(2, '0')}:${next.start.minute.toString().padLeft(2, '0')}';
+            '${block.start.hour.toString().padLeft(2, '0')}:${block.start.minute.toString().padLeft(2, '0')}';
+        final dayLabel = upcoming.isToday ? 'Today' : _weekdayName(block.dayOfWeek);
         return AppCard(
           padding: const EdgeInsets.all(Sp.md),
           onTap: () => context.go('/time'),
@@ -399,9 +422,9 @@ class _UpNextCard extends StatelessWidget {
                     Text('UP NEXT',
                         style: Theme.of(context).textTheme.labelSmall?.copyWith(color: t.inkMuted)),
                     const SizedBox(height: 2),
-                    Text(next.name, style: AppText.title.copyWith(color: t.ink)),
+                    Text(upcoming.subject.name, style: AppText.title.copyWith(color: t.ink)),
                     const SizedBox(height: 2),
-                    Text('Starts $timeLabel  ·  ${next.totalQuarters * 15} min planned',
+                    Text('$dayLabel $timeLabel  ·  ${block.durationMinutes} min planned',
                         style: AppText.label.copyWith(color: t.inkMuted)),
                   ],
                 ),
@@ -414,6 +437,50 @@ class _UpNextCard extends StatelessWidget {
     );
   }
 }
+
+class _UpcomingBlockHit {
+  final Subject subject;
+  final SubjectBlock block;
+  final bool isToday;
+  const _UpcomingBlockHit({
+    required this.subject,
+    required this.block,
+    required this.isToday,
+  });
+}
+
+/// Find the next non-expired block: prefer one that hasn't started today, then
+/// scan forward day by day for up to 7 days.
+_UpcomingBlockHit? _nextUpcomingBlock(List<Subject> subjects, DateTime now) {
+  final today = DateTime(now.year, now.month, now.day);
+  for (var off = 0; off < 7; off++) {
+    final day = today.add(Duration(days: off));
+    final dow = day.weekday;
+    _UpcomingBlockHit? best;
+    int? bestStartMin;
+    for (final s in subjects) {
+      if (!s.isLiveOn(day)) continue;
+      for (final b in s.blocks) {
+        if (b.dayOfWeek != dow) continue;
+        if (off == 0) {
+          final blockStart = day.add(Duration(hours: b.start.hour, minutes: b.start.minute));
+          if (!blockStart.isAfter(now)) continue;
+        }
+        if (bestStartMin == null || b.startMinute < bestStartMin) {
+          bestStartMin = b.startMinute;
+          best = _UpcomingBlockHit(subject: s, block: b, isToday: off == 0);
+        }
+      }
+    }
+    if (best != null) return best;
+  }
+  return null;
+}
+
+const List<String> _weekdayNames = [
+  'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun',
+];
+String _weekdayName(int dow) => _weekdayNames[(dow - 1).clamp(0, 6)];
 
 class _TodayHabitsCard extends StatelessWidget {
   @override

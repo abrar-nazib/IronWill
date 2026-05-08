@@ -35,6 +35,12 @@ class _HabitLogSheetState extends State<_HabitLogSheet> {
   bool _loading = true;
   bool _hydrated = false;
 
+  /// One controller per field: text/number values use the same controller;
+  /// list types parse a comma-separated string ("15, 12, 10" → [15,12,10]).
+  /// Booleans use [_boolValues] instead.
+  final Map<String, TextEditingController> _fieldControllers = {};
+  final Map<String, bool> _boolValues = {};
+
   @override
   void didChangeDependencies() {
     super.didChangeDependencies();
@@ -46,6 +52,9 @@ class _HabitLogSheetState extends State<_HabitLogSheet> {
   @override
   void dispose() {
     _note.dispose();
+    for (final c in _fieldControllers.values) {
+      c.dispose();
+    }
     super.dispose();
   }
 
@@ -54,11 +63,87 @@ class _HabitLogSheetState extends State<_HabitLogSheet> {
     final day = widget.day ?? DateTime.now();
     final existing = await svc.habits.getLog(widget.habit.id, day);
     if (!mounted) return;
+    final fields = parseHabitFields(widget.habit.metadata);
+    final logMeta = existing?.metadata ?? const {};
+    for (final f in fields) {
+      switch (f.type) {
+        case HabitFieldType.boolean:
+          _boolValues[f.key] = (logMeta[f.key] as bool?) ?? false;
+          break;
+        case HabitFieldType.boolList:
+          final raw = logMeta[f.key];
+          final list = (raw is List)
+              ? raw.map((e) => (e == true) ? 'yes' : 'no').toList()
+              : <String>[];
+          _fieldControllers[f.key] =
+              TextEditingController(text: list.join(', '));
+          break;
+        case HabitFieldType.intList:
+          final raw = logMeta[f.key];
+          final list = (raw is List)
+              ? raw.map((e) => e.toString()).toList()
+              : <String>[];
+          _fieldControllers[f.key] =
+              TextEditingController(text: list.join(', '));
+          break;
+        case HabitFieldType.number:
+          _fieldControllers[f.key] =
+              TextEditingController(text: (logMeta[f.key]?.toString()) ?? '');
+          break;
+        case HabitFieldType.text:
+          _fieldControllers[f.key] =
+              TextEditingController(text: (logMeta[f.key]?.toString()) ?? '');
+          break;
+      }
+    }
     setState(() {
       _picked = existing?.utilization;
       _note.text = existing?.note ?? '';
       _loading = false;
     });
+  }
+
+  Map<String, Object?> _collectMetadata(List<HabitField> fields) {
+    final out = <String, Object?>{};
+    for (final f in fields) {
+      switch (f.type) {
+        case HabitFieldType.boolean:
+          out[f.key] = _boolValues[f.key] ?? false;
+          break;
+        case HabitFieldType.boolList:
+          final raw = (_fieldControllers[f.key]?.text ?? '').trim();
+          if (raw.isEmpty) continue;
+          out[f.key] = raw
+              .split(',')
+              .map((s) => s.trim().toLowerCase())
+              .where((s) => s.isNotEmpty)
+              .map((s) => s == 'y' || s == 'yes' || s == 'true' || s == '1')
+              .toList();
+          break;
+        case HabitFieldType.intList:
+          final raw = (_fieldControllers[f.key]?.text ?? '').trim();
+          if (raw.isEmpty) continue;
+          final parsed = raw
+              .split(',')
+              .map((s) => int.tryParse(s.trim()))
+              .where((v) => v != null)
+              .cast<int>()
+              .toList();
+          out[f.key] = parsed;
+          break;
+        case HabitFieldType.number:
+          final raw = (_fieldControllers[f.key]?.text ?? '').trim();
+          if (raw.isEmpty) continue;
+          final n = int.tryParse(raw);
+          if (n != null) out[f.key] = n;
+          break;
+        case HabitFieldType.text:
+          final raw = (_fieldControllers[f.key]?.text ?? '').trim();
+          if (raw.isNotEmpty) out[f.key] = raw;
+          break;
+      }
+    }
+    return out;
   }
 
   String _dateLabel() {
@@ -76,10 +161,14 @@ class _HabitLogSheetState extends State<_HabitLogSheet> {
     final svc = AppServices.of(context);
     final day = widget.day;
     final note = _note.text.trim();
+    final fields = parseHabitFields(widget.habit.metadata);
+    final metadata = _collectMetadata(fields);
     if (day == null) {
-      await svc.habits.logToday(widget.habit.id, picked, note: note);
+      await svc.habits.logToday(widget.habit.id, picked,
+          note: note, metadata: metadata);
     } else {
-      await svc.habits.logDay(widget.habit.id, day, picked, note: note);
+      await svc.habits.logDay(widget.habit.id, day, picked,
+          note: note, metadata: metadata);
     }
     if (mounted) Navigator.of(context).pop();
   }
@@ -196,6 +285,37 @@ class _HabitLogSheetState extends State<_HabitLogSheet> {
                       ),
                   ],
                 ),
+              if (!_loading) ...[
+                Builder(builder: (_) {
+                  final fields = parseHabitFields(widget.habit.metadata);
+                  if (fields.isEmpty) return const SizedBox.shrink();
+                  return Padding(
+                    padding: const EdgeInsets.only(top: Sp.lg),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text('TODAY\'S NUMBERS',
+                            style: Theme.of(context)
+                                .textTheme
+                                .labelSmall
+                                ?.copyWith(color: t.inkMuted)),
+                        const SizedBox(height: Sp.s),
+                        for (final f in fields)
+                          Padding(
+                            padding: const EdgeInsets.only(bottom: Sp.s),
+                            child: _FieldInput(
+                              field: f,
+                              controller: _fieldControllers[f.key],
+                              boolValue: _boolValues[f.key] ?? false,
+                              onBoolChanged: (v) =>
+                                  setState(() => _boolValues[f.key] = v),
+                            ),
+                          ),
+                      ],
+                    ),
+                  );
+                }),
+              ],
               const SizedBox(height: Sp.lg),
               Text('NOTE (OPTIONAL)',
                   style: Theme.of(context).textTheme.labelSmall?.copyWith(color: t.inkMuted)),
@@ -229,6 +349,92 @@ class _HabitLogSheetState extends State<_HabitLogSheet> {
             ],
           ),
         ),
+      ),
+    );
+  }
+}
+
+/// Type-aware editor for one habit field on a single day.
+class _FieldInput extends StatelessWidget {
+  final HabitField field;
+  final TextEditingController? controller;
+  final bool boolValue;
+  final ValueChanged<bool> onBoolChanged;
+  const _FieldInput({
+    required this.field,
+    required this.controller,
+    required this.boolValue,
+    required this.onBoolChanged,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final t = context.tokens;
+    final keyChip = Container(
+      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+      decoration: BoxDecoration(
+        color: t.surface,
+        borderRadius: BorderRadius.circular(R.xs),
+        border: Border.all(color: t.divider),
+      ),
+      child: Text(field.key,
+          style: AppText.mono.copyWith(
+            color: t.ink,
+            fontWeight: FontWeight.w700,
+          )),
+    );
+    if (field.type == HabitFieldType.boolean) {
+      return Container(
+        padding: const EdgeInsets.symmetric(horizontal: Sp.md, vertical: Sp.s),
+        decoration: BoxDecoration(
+          color: t.surfaceAlt,
+          borderRadius: BorderRadius.circular(R.s),
+          border: Border.all(color: t.divider),
+        ),
+        child: Row(
+          children: [
+            keyChip,
+            const SizedBox(width: Sp.m),
+            Expanded(
+              child: Text(field.type.label,
+                  style: AppText.label.copyWith(color: t.inkMuted)),
+            ),
+            Switch.adaptive(
+              value: boolValue,
+              onChanged: onBoolChanged,
+            ),
+          ],
+        ),
+      );
+    }
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: Sp.md, vertical: Sp.s),
+      decoration: BoxDecoration(
+        color: t.surfaceAlt,
+        borderRadius: BorderRadius.circular(R.s),
+        border: Border.all(color: t.divider),
+      ),
+      child: Row(
+        children: [
+          keyChip,
+          const SizedBox(width: Sp.m),
+          Expanded(
+            child: TextField(
+              controller: controller,
+              keyboardType: field.type == HabitFieldType.number
+                  ? TextInputType.number
+                  : TextInputType.text,
+              style: AppText.body.copyWith(color: t.ink, fontSize: 15),
+              decoration: InputDecoration(
+                isDense: true,
+                contentPadding: EdgeInsets.zero,
+                border: InputBorder.none,
+                hintText: field.type.hint,
+                hintStyle: AppText.label.copyWith(color: t.inkMuted),
+              ),
+            ),
+          ),
+        ],
       ),
     );
   }

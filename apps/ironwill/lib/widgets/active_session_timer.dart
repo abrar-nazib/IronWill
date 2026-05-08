@@ -9,17 +9,16 @@ import '../models/models.dart';
 import '../services/app_services.dart';
 import '../theme/tokens.dart';
 import '../theme/typography.dart';
-import 'session_active_pill.dart' show currentlyActiveSession;
 
-/// Live dual timer for the currently active focus session.
+/// Live dual timer for the currently active focus block under any subject.
 ///
 /// Header style: compact ember pill that fits in a Today / Time screen sliver.
-/// Shows the session name, total remaining (HH:MM:SS) and time to the next
+/// Shows the subject name, total remaining (HH:MM:SS) and time to the next
 /// 15-minute accountability tick (MM:SS). Updates every second.
 ///
-/// Tap the timer to open a full-screen floating timer that keeps the screen
-/// awake (via wakelock_plus) while it is open. Useful for tracking the
-/// remaining time at a glance without the device locking.
+/// Tap the timer to open a floating dialog that keeps the screen awake (via
+/// wakelock_plus) while it is open. Useful for tracking the remaining time at
+/// a glance without the device locking.
 class ActiveSessionTimer extends StatefulWidget {
   const ActiveSessionTimer({super.key});
 
@@ -49,14 +48,14 @@ class _ActiveSessionTimerState extends State<ActiveSessionTimer> {
   @override
   Widget build(BuildContext context) {
     final svc = AppServices.of(context);
-    return ValueListenableBuilder<List<FocusSession>>(
-      valueListenable: svc.sessions.all,
-      builder: (_, sessions, __) {
-        final active = currentlyActiveSession(sessions);
+    return ValueListenableBuilder<List<Subject>>(
+      valueListenable: svc.subjects.all,
+      builder: (_, subjects, __) {
+        final active = currentlyActiveBlock(subjects, _now);
         if (active == null) return const SizedBox.shrink();
-        final timing = computeSessionTiming(active, _now);
+        final timing = computeBlockTiming(active, _now);
         return _Header(
-          session: active,
+          active: active,
           timing: timing,
           onTap: () => _openFloating(context, active),
         );
@@ -64,38 +63,76 @@ class _ActiveSessionTimerState extends State<ActiveSessionTimer> {
     );
   }
 
-  Future<void> _openFloating(BuildContext context, FocusSession session) async {
+  Future<void> _openFloating(BuildContext context, ActiveBlock active) async {
     await showDialog<void>(
       context: context,
       barrierDismissible: true,
-      builder: (_) => _FloatingTimerDialog(sessionId: session.id),
+      builder: (_) => _FloatingTimerDialog(blockId: active.block.id),
     );
   }
 }
 
-/// Pure data: time math for an active session, computed off [now].
-class SessionTiming {
+/// Pure data: time math for an active block, computed off [now]. Includes
+/// pomodoro context so the UI can tint the rest period and the "next log"
+/// label can flip to "rest in" when pomodoro is enabled.
+class BlockTiming {
   final Duration totalRemaining;
+
+  /// Time until the next 15-minute quarter boundary, OR the start of the
+  /// pomodoro rest if that comes first (when pomodoro is enabled).
   final Duration toNextQuarter;
-  const SessionTiming({
+
+  /// True if pomodoro is on for this block AND `now` has crossed the rest
+  /// boundary. Drives the "you're resting" tint and label.
+  final bool inRestPeriod;
+
+  /// The countdown the timer should display next. When pomodoro is on and
+  /// we have NOT yet reached rest, this is the time until rest starts.
+  /// Otherwise it's the same as [toNextQuarter].
+  final Duration toNextSignal;
+  const BlockTiming({
     required this.totalRemaining,
     required this.toNextQuarter,
+    required this.inRestPeriod,
+    required this.toNextSignal,
   });
 }
 
-SessionTiming computeSessionTiming(FocusSession s, DateTime now) {
-  final today = DateTime(now.year, now.month, now.day);
-  final start = today.add(Duration(hours: s.start.hour, minutes: s.start.minute));
-  final end = today.add(Duration(hours: s.end.hour, minutes: s.end.minute));
-  var total = end.difference(now);
+BlockTiming computeBlockTiming(ActiveBlock active, DateTime now) {
+  var total = active.endAt.difference(now);
   if (total.isNegative) total = Duration.zero;
-  final sinceStart = now.difference(start);
+  final sinceStart = now.difference(active.startAt);
   final secondsSinceStart = sinceStart.inSeconds.clamp(0, 1 << 31);
-  final secondsToNextQuarter =
-      900 - (secondsSinceStart % 900);
+  final secondsToNextQuarter = 900 - (secondsSinceStart % 900);
   var toNext = Duration(seconds: secondsToNextQuarter);
   if (toNext > total) toNext = total;
-  return SessionTiming(totalRemaining: total, toNextQuarter: toNext);
+
+  Duration toNextSignal = toNext;
+  bool inRest = false;
+  if (active.block.pomodoroEnabled) {
+    final blockMinutes = active.endAt.difference(active.startAt).inMinutes;
+    final restMinutes =
+        (blockMinutes * active.block.pomodoroPercent / 100).round();
+    if (restMinutes > 0 && restMinutes < blockMinutes) {
+      final restStart =
+          active.endAt.subtract(Duration(minutes: restMinutes));
+      if (!now.isBefore(restStart)) {
+        inRest = true;
+        // While in rest, the next signal is just the block end.
+        toNextSignal = total;
+      } else {
+        final toRest = restStart.difference(now);
+        if (toRest < toNextSignal) toNextSignal = toRest;
+      }
+    }
+  }
+
+  return BlockTiming(
+    totalRemaining: total,
+    toNextQuarter: toNext,
+    inRestPeriod: inRest,
+    toNextSignal: toNextSignal,
+  );
 }
 
 String _hms(Duration d) {
@@ -114,11 +151,11 @@ String _ms(Duration d) {
 }
 
 class _Header extends StatelessWidget {
-  final FocusSession session;
-  final SessionTiming timing;
+  final ActiveBlock active;
+  final BlockTiming timing;
   final VoidCallback onTap;
   const _Header({
-    required this.session,
+    required this.active,
     required this.timing,
     required this.onTap,
   });
@@ -126,6 +163,13 @@ class _Header extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final t = context.tokens;
+    // During pomodoro rest the pill switches from ember to a calmer steel tone
+    // so the user sees at a glance that they're in a break, not a focus block.
+    final pillBg = timing.inRestPeriod ? t.steel : t.accent;
+    final pillFg = timing.inRestPeriod ? t.bg : t.accentInk;
+    final secondaryLabel = timing.inRestPeriod
+        ? 'rest'
+        : (active.block.pomodoroEnabled ? 'to rest' : 'to log');
     return Material(
       color: Colors.transparent,
       child: InkWell(
@@ -134,7 +178,7 @@ class _Header extends StatelessWidget {
         child: Container(
           padding: const EdgeInsets.symmetric(horizontal: Sp.md, vertical: Sp.s),
           decoration: BoxDecoration(
-            color: t.accent,
+            color: pillBg,
             borderRadius: BorderRadius.circular(R.s),
           ),
           child: Row(
@@ -142,12 +186,16 @@ class _Header extends StatelessWidget {
               Container(
                 width: 8, height: 8,
                 decoration: BoxDecoration(
-                  color: t.accentInk,
+                  color: pillFg,
                   shape: BoxShape.circle,
                 ),
               ),
               const SizedBox(width: Sp.s),
-              Icon(LucideIcons.target, color: t.accentInk, size: IconSize.s),
+              Icon(
+                timing.inRestPeriod ? LucideIcons.coffee : LucideIcons.target,
+                color: pillFg,
+                size: IconSize.s,
+              ),
               const SizedBox(width: Sp.xs),
               Expanded(
                 child: Column(
@@ -155,9 +203,9 @@ class _Header extends StatelessWidget {
                   mainAxisSize: MainAxisSize.min,
                   children: [
                     Text(
-                      session.name,
+                      active.subject.name,
                       style: AppText.bodyStrong.copyWith(
-                        color: t.accentInk,
+                        color: pillFg,
                         fontSize: 13,
                       ),
                       overflow: TextOverflow.ellipsis,
@@ -168,7 +216,7 @@ class _Header extends StatelessWidget {
                         Text(
                           _hms(timing.totalRemaining),
                           style: AppText.mono.copyWith(
-                            color: t.accentInk,
+                            color: pillFg,
                             fontSize: 14,
                             fontWeight: FontWeight.w700,
                           ),
@@ -176,22 +224,22 @@ class _Header extends StatelessWidget {
                         const SizedBox(width: Sp.s),
                         Text('total',
                             style: AppText.label.copyWith(
-                              color: t.accentInk.withValues(alpha: 0.75),
+                              color: pillFg.withValues(alpha: 0.75),
                               fontSize: 10,
                             )),
                         const SizedBox(width: Sp.m),
                         Text(
-                          _ms(timing.toNextQuarter),
+                          _ms(timing.toNextSignal),
                           style: AppText.mono.copyWith(
-                            color: t.accentInk,
+                            color: pillFg,
                             fontSize: 14,
                             fontWeight: FontWeight.w700,
                           ),
                         ),
                         const SizedBox(width: Sp.s),
-                        Text('to log',
+                        Text(secondaryLabel,
                             style: AppText.label.copyWith(
-                              color: t.accentInk.withValues(alpha: 0.75),
+                              color: pillFg.withValues(alpha: 0.75),
                               fontSize: 10,
                             )),
                       ],
@@ -200,7 +248,7 @@ class _Header extends StatelessWidget {
                 ),
               ),
               Icon(LucideIcons.maximize2,
-                  color: t.accentInk.withValues(alpha: 0.85), size: IconSize.s),
+                  color: pillFg.withValues(alpha: 0.85), size: IconSize.s),
             ],
           ),
         ),
@@ -210,8 +258,8 @@ class _Header extends StatelessWidget {
 }
 
 class _FloatingTimerDialog extends StatefulWidget {
-  final String sessionId;
-  const _FloatingTimerDialog({required this.sessionId});
+  final String blockId;
+  const _FloatingTimerDialog({required this.blockId});
 
   @override
   State<_FloatingTimerDialog> createState() => _FloatingTimerDialogState();
@@ -258,17 +306,26 @@ class _FloatingTimerDialogState extends State<_FloatingTimerDialog> {
       backgroundColor: t.bg,
       insetPadding: const EdgeInsets.all(Sp.m),
       shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(R.m)),
-      child: ValueListenableBuilder<List<FocusSession>>(
-        valueListenable: svc.sessions.all,
-        builder: (_, sessions, __) {
-          final session = sessions.where((s) => s.id == widget.sessionId).firstOrNull;
-          if (session == null) {
+      child: ValueListenableBuilder<List<Subject>>(
+        valueListenable: svc.subjects.all,
+        builder: (_, subjects, __) {
+          final active = currentlyActiveBlock(subjects, _now);
+          if (active == null || active.block.id != widget.blockId) {
             WidgetsBinding.instance.addPostFrameCallback((_) {
               if (mounted) Navigator.of(context).pop();
             });
             return const SizedBox.shrink();
           }
-          final timing = computeSessionTiming(session, _now);
+          final timing = computeBlockTiming(active, _now);
+          final block = active.block;
+          final restMinutes =
+              ((active.endAt.difference(active.startAt).inMinutes) *
+                      block.pomodoroPercent /
+                      100)
+                  .round();
+          final secondaryLabel = timing.inRestPeriod
+              ? 'REST PERIOD'
+              : (block.pomodoroEnabled ? 'REST IN' : 'NEXT LOG IN');
           return Padding(
             padding: const EdgeInsets.fromLTRB(Sp.lg, Sp.lg, Sp.lg, Sp.lg),
             child: Column(
@@ -279,7 +336,7 @@ class _FloatingTimerDialogState extends State<_FloatingTimerDialog> {
                   children: [
                     Expanded(
                       child: Text(
-                        session.name,
+                        active.subject.name,
                         style: AppText.headline.copyWith(color: t.ink),
                         overflow: TextOverflow.ellipsis,
                       ),
@@ -291,20 +348,38 @@ class _FloatingTimerDialogState extends State<_FloatingTimerDialog> {
                   ],
                 ),
                 Text(
-                  'Screen stays on while this is open.',
-                  style: AppText.label.copyWith(color: t.inkMuted),
+                  timing.inRestPeriod
+                      ? 'Rest period.  Take it. Log the focus you just did.'
+                      : 'Screen stays on while this is open.',
+                  style: AppText.label.copyWith(
+                    color: timing.inRestPeriod ? t.accent : t.inkMuted,
+                    fontWeight:
+                        timing.inRestPeriod ? FontWeight.w700 : FontWeight.w500,
+                  ),
                 ),
                 const SizedBox(height: Sp.lg),
                 _BigTimerBlock(
-                  label: 'TIME LEFT IN SESSION',
+                  label: 'TIME LEFT IN BLOCK',
                   value: _hms(timing.totalRemaining),
                   emphasized: true,
+                  restMode: timing.inRestPeriod,
                 ),
                 const SizedBox(height: Sp.md),
                 _BigTimerBlock(
-                  label: 'NEXT LOG IN',
-                  value: _ms(timing.toNextQuarter),
+                  label: secondaryLabel,
+                  value: _ms(timing.toNextSignal),
                   emphasized: false,
+                  restMode: timing.inRestPeriod,
+                ),
+                const SizedBox(height: Sp.md),
+                _PomodoroRow(
+                  block: block,
+                  restMinutes: restMinutes,
+                  onToggle: (v) async {
+                    final svc = AppServices.of(context);
+                    await svc.subjects.updateBlock(
+                        block.copyWith(pomodoroEnabled: v));
+                  },
                 ),
                 const SizedBox(height: Sp.lg),
                 Row(
@@ -334,17 +409,32 @@ class _BigTimerBlock extends StatelessWidget {
   final String label;
   final String value;
   final bool emphasized;
+
+  /// During pomodoro rest the emphasized block flips from ink to ember so the
+  /// user gets a strong visual signal that they're in a break.
+  final bool restMode;
   const _BigTimerBlock({
     required this.label,
     required this.value,
     required this.emphasized,
+    this.restMode = false,
   });
 
   @override
   Widget build(BuildContext context) {
     final t = context.tokens;
-    final bg = emphasized ? t.ink : t.surfaceAlt;
-    final fg = emphasized ? t.bg : t.ink;
+    final Color bg;
+    final Color fg;
+    if (restMode && emphasized) {
+      bg = t.accent;
+      fg = t.accentInk;
+    } else if (emphasized) {
+      bg = t.ink;
+      fg = t.bg;
+    } else {
+      bg = t.surfaceAlt;
+      fg = t.ink;
+    }
     return Container(
       width: double.infinity,
       padding: const EdgeInsets.all(Sp.lg),
@@ -366,6 +456,59 @@ class _BigTimerBlock extends StatelessWidget {
                 color: fg,
                 fontFeatures: const [FontFeature.tabularFigures()],
               )),
+        ],
+      ),
+    );
+  }
+}
+
+/// Per-block pomodoro switch shown inside the floating dialog. Toggling
+/// updates the block via [SubjectsRepository.updateBlock] which cascades into
+/// the schedule rebuild and notification reschedule via the wired listeners.
+class _PomodoroRow extends StatelessWidget {
+  final SubjectBlock block;
+  final int restMinutes;
+  final ValueChanged<bool> onToggle;
+  const _PomodoroRow({
+    required this.block,
+    required this.restMinutes,
+    required this.onToggle,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final t = context.tokens;
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: Sp.md, vertical: Sp.s),
+      decoration: BoxDecoration(
+        color: t.surfaceAlt,
+        borderRadius: BorderRadius.circular(R.s),
+        border: Border.all(color: t.divider),
+      ),
+      child: Row(
+        children: [
+          Icon(LucideIcons.coffee, color: t.ink, size: IconSize.m),
+          const SizedBox(width: Sp.m),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Text('Pomodoro',
+                    style: AppText.bodyStrong.copyWith(color: t.ink)),
+                Text(
+                  block.pomodoroEnabled
+                      ? 'Last $restMinutes min of this block is rest (${block.pomodoroPercent}%).'
+                      : 'No rest. The full block counts as focus.',
+                  style: AppText.label.copyWith(color: t.inkMuted),
+                ),
+              ],
+            ),
+          ),
+          Switch.adaptive(
+            value: block.pomodoroEnabled,
+            onChanged: onToggle,
+          ),
         ],
       ),
     );

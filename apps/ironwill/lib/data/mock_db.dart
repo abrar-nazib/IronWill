@@ -14,12 +14,12 @@ class MockDb {
 
   // Mutable backing state. Repositories mutate these and notify listeners.
   late final Map<String, Habit> habits = _seedHabits();
-  late final List<FocusSession> sessions = _seedSessions();
+  late final List<Subject> subjects = _seedSubjects();
   late final Map<DateTime, DayBlocks> days = _seedDays(today);
 
   UserProfile profile = const UserProfile(
     name: 'Abrar',
-    dailyFocusMinutesTarget: 240,
+    weeklyFocusMinutes: [240, 240, 240, 240, 240, 120, 120],
     focusStreakDays: 13,
     avatarLetter: 'A',
   );
@@ -110,41 +110,55 @@ class MockDb {
     return {for (final h in base) h.id: h};
   }
 
-  List<FocusSession> _seedSessions() => [
-        FocusSession(
-          id: 's1',
-          name: 'Deep work block',
-          start: const TimeOfDay(hour: 6, minute: 0),
-          end: const TimeOfDay(hour: 9, minute: 0),
-          daysOfWeek: const [1, 2, 3, 4, 5],
-          quarters: const [
-            Utilization.full, Utilization.full, Utilization.full, Utilization.good,
-            Utilization.good, Utilization.full, Utilization.mid, Utilization.full,
-            Utilization.good, Utilization.full, Utilization.full, Utilization.good,
-          ],
-        ),
-        FocusSession(
-          id: 's2',
-          name: 'Build session',
-          start: const TimeOfDay(hour: 14, minute: 0),
-          end: const TimeOfDay(hour: 16, minute: 0),
-          daysOfWeek: const [1, 2, 3, 4, 5],
-          quarters: const [
-            Utilization.good, Utilization.mid, Utilization.low, Utilization.wasted,
-            Utilization.mid, Utilization.good, Utilization.good, Utilization.full,
-          ],
-        ),
-        FocusSession(
-          id: 's3',
-          name: 'Review and journal',
-          start: const TimeOfDay(hour: 21, minute: 0),
-          end: const TimeOfDay(hour: 22, minute: 0),
-          daysOfWeek: const [1, 2, 3, 4, 5, 6, 7],
-          quarters: const [
-            Utilization.none, Utilization.none, Utilization.none, Utilization.none,
-          ],
-        ),
-      ];
+  /// Seed subjects expire 7 days from `today` so the mock matches the
+  /// production TTL behaviour (the user can press "Repeat next week" to extend).
+  List<Subject> _seedSubjects() {
+    final created = today;
+    final expiresAt = today.add(const Duration(days: 7));
+    SubjectBlock blk(String id, String subjectId, int day, int sh, int sm, int eh, int em) =>
+        SubjectBlock(
+          id: id,
+          subjectId: subjectId,
+          dayOfWeek: day,
+          start: TimeOfDay(hour: sh, minute: sm),
+          end: TimeOfDay(hour: eh, minute: em),
+        );
+    return [
+      Subject(
+        id: 'subj_deep_work',
+        name: 'Deep work',
+        expiresAt: expiresAt,
+        createdAt: created,
+        order: 0,
+        blocks: [
+          for (final d in const [1, 2, 3, 4, 5])
+            blk('blk_deep_$d', 'subj_deep_work', d, 6, 0, 9, 0),
+        ],
+      ),
+      Subject(
+        id: 'subj_build',
+        name: 'Build session',
+        expiresAt: expiresAt,
+        createdAt: created,
+        order: 1,
+        blocks: [
+          for (final d in const [1, 2, 3, 4, 5])
+            blk('blk_build_$d', 'subj_build', d, 14, 0, 16, 0),
+        ],
+      ),
+      Subject(
+        id: 'subj_review',
+        name: 'Review and journal',
+        expiresAt: expiresAt,
+        createdAt: created,
+        order: 2,
+        blocks: [
+          for (final d in const [1, 2, 3, 4, 5, 6, 7])
+            blk('blk_review_$d', 'subj_review', d, 21, 0, 22, 0),
+        ],
+      ),
+    ];
+  }
 
   Map<DateTime, DayBlocks> _seedDays(DateTime end) {
     final out = <DateTime, DayBlocks>{};

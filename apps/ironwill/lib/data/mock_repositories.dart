@@ -123,7 +123,8 @@ class MockHabitsRepository implements HabitsRepository {
   }
 
   @override
-  Future<void> logToday(String habitId, Utilization u, {String note = ''}) async {
+  Future<void> logToday(String habitId, Utilization u,
+      {String note = '', Map<String, Object?> metadata = const {}}) async {
     await Future.delayed(_ioLatency);
     final h = _db.habits[habitId];
     if (h == null) return;
@@ -141,7 +142,8 @@ class MockHabitsRepository implements HabitsRepository {
   }
 
   @override
-  Future<void> logDay(String habitId, DateTime day, Utilization u, {String note = ''}) async {
+  Future<void> logDay(String habitId, DateTime day, Utilization u,
+      {String note = '', Map<String, Object?> metadata = const {}}) async {
     await Future.delayed(_ioLatency);
     final h = _db.habits[habitId];
     if (h == null) return;
@@ -205,57 +207,69 @@ class MockTimeRepository implements TimeRepository {
   }
 }
 
-class MockFocusSessionsRepository implements FocusSessionsRepository {
+class MockSubjectsRepository implements SubjectsRepository {
   final MockDb _db;
-  final ValueNotifier<List<FocusSession>> _all;
+  final ValueNotifier<List<Subject>> _all;
 
-  MockFocusSessionsRepository(this._db)
-      : _all = ValueNotifier(List<FocusSession>.from(_db.sessions));
+  MockSubjectsRepository(this._db)
+      : _all = ValueNotifier(List<Subject>.from(_db.subjects));
 
-  void _publish() => _all.value = List<FocusSession>.from(_db.sessions);
-
-  @override
-  ValueListenable<List<FocusSession>> get all => _all;
+  void _publish() => _all.value = List<Subject>.from(_db.subjects);
 
   @override
-  Future<List<FocusSession>> listAll() async {
+  ValueListenable<List<Subject>> get all => _all;
+
+  @override
+  Future<List<Subject>> listAll() async {
     await Future.delayed(_ioLatency);
     return _all.value;
   }
 
   @override
-  Future<FocusSession?> getById(String id) async {
+  Future<Subject?> getById(String id) async {
     await Future.delayed(_ioLatency);
-    return _all.value.cast<FocusSession?>().firstWhere(
+    return _all.value.cast<Subject?>().firstWhere(
           (s) => s?.id == id,
           orElse: () => null,
         );
   }
 
   @override
-  Future<FocusSession> create(FocusSessionDraft draft) async {
+  Future<Subject> create(SubjectDraft draft) async {
     await Future.delayed(_ioLatency);
-    final id = 's${DateTime.now().microsecondsSinceEpoch}';
-    final hours = draft.end.hour - draft.start.hour;
-    final s = FocusSession(
+    final id = 'subj_${DateTime.now().microsecondsSinceEpoch}';
+    final blocks = <SubjectBlock>[
+      for (var i = 0; i < draft.blocks.length; i++)
+        SubjectBlock(
+          id: 'blk_${DateTime.now().microsecondsSinceEpoch}_$i',
+          subjectId: id,
+          dayOfWeek: draft.blocks[i].dayOfWeek,
+          start: draft.blocks[i].start,
+          end: draft.blocks[i].end,
+          pomodoroEnabled: draft.blocks[i].pomodoroEnabled,
+          pomodoroPercent: draft.blocks[i].pomodoroPercent,
+        ),
+    ];
+    final s = Subject(
       id: id,
       name: draft.name,
-      start: draft.start,
-      end: draft.end,
-      daysOfWeek: draft.daysOfWeek,
-      quarters: List<Utilization>.filled((hours.clamp(0, 24)) * 4, Utilization.none),
+      expiresAt: draft.expiresAt,
+      createdAt: DateTime.now(),
+      order: _db.subjects.length,
+      blocks: blocks,
     );
-    _db.sessions.add(s);
+    _db.subjects.add(s);
     _publish();
     return s;
   }
 
   @override
-  Future<FocusSession> update(FocusSession s) async {
+  Future<Subject> update(Subject s) async {
     await Future.delayed(_ioLatency);
-    final idx = _db.sessions.indexWhere((x) => x.id == s.id);
+    final idx = _db.subjects.indexWhere((x) => x.id == s.id);
     if (idx >= 0) {
-      _db.sessions[idx] = s;
+      // Preserve existing blocks; update mutates only subject-level fields.
+      _db.subjects[idx] = s.copyWith(blocks: _db.subjects[idx].blocks);
       _publish();
     }
     return s;
@@ -264,8 +278,69 @@ class MockFocusSessionsRepository implements FocusSessionsRepository {
   @override
   Future<void> delete(String id) async {
     await Future.delayed(_ioLatency);
-    _db.sessions.removeWhere((s) => s.id == id);
+    _db.subjects.removeWhere((s) => s.id == id);
     _publish();
+  }
+
+  @override
+  Future<SubjectBlock> addBlock(String subjectId, SubjectBlockDraft draft) async {
+    await Future.delayed(_ioLatency);
+    final idx = _db.subjects.indexWhere((s) => s.id == subjectId);
+    if (idx < 0) throw StateError('Subject $subjectId not found');
+    final id = 'blk_${DateTime.now().microsecondsSinceEpoch}';
+    final block = SubjectBlock(
+      id: id,
+      subjectId: subjectId,
+      dayOfWeek: draft.dayOfWeek,
+      start: draft.start,
+      end: draft.end,
+      pomodoroEnabled: draft.pomodoroEnabled,
+      pomodoroPercent: draft.pomodoroPercent,
+    );
+    final next = [..._db.subjects[idx].blocks, block];
+    _db.subjects[idx] = _db.subjects[idx].copyWith(blocks: next);
+    _publish();
+    return block;
+  }
+
+  @override
+  Future<SubjectBlock> updateBlock(SubjectBlock block) async {
+    await Future.delayed(_ioLatency);
+    final si = _db.subjects.indexWhere((s) => s.id == block.subjectId);
+    if (si < 0) return block;
+    final blocks = [..._db.subjects[si].blocks];
+    final bi = blocks.indexWhere((b) => b.id == block.id);
+    if (bi >= 0) blocks[bi] = block;
+    _db.subjects[si] = _db.subjects[si].copyWith(blocks: blocks);
+    _publish();
+    return block;
+  }
+
+  @override
+  Future<void> deleteBlock(String blockId) async {
+    await Future.delayed(_ioLatency);
+    for (var i = 0; i < _db.subjects.length; i++) {
+      final blocks = _db.subjects[i].blocks.where((b) => b.id != blockId).toList();
+      if (blocks.length != _db.subjects[i].blocks.length) {
+        _db.subjects[i] = _db.subjects[i].copyWith(blocks: blocks);
+      }
+    }
+    _publish();
+  }
+
+  @override
+  Future<Subject> repeatNextWeek(String subjectId) async {
+    await Future.delayed(_ioLatency);
+    final idx = _db.subjects.indexWhere((s) => s.id == subjectId);
+    if (idx < 0) throw StateError('Subject $subjectId not found');
+    final s = _db.subjects[idx];
+    final today = DateTime.now();
+    final todayDate = DateTime(today.year, today.month, today.day);
+    final base = s.expiresAt.isBefore(todayDate) ? todayDate : s.expiresAt;
+    final extended = s.copyWith(expiresAt: base.add(const Duration(days: 7)));
+    _db.subjects[idx] = extended;
+    _publish();
+    return extended;
   }
 }
 
@@ -289,7 +364,7 @@ class MockStatsRepository implements StatsRepository {
     }).length;
     return DashboardStats(
       focusMinutesToday: today.focusedMinutes,
-      dailyFocusTarget: _db.profile.dailyFocusMinutesTarget,
+      dailyFocusTarget: _db.profile.targetForToday(_db.today),
       focusStreakDays: _db.profile.focusStreakDays,
       habitsDueToday: activeHabits.length,
       habitsCompletedToday: completedToday,

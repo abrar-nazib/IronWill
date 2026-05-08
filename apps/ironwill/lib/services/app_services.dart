@@ -17,7 +17,7 @@ import 'notifications_service.dart';
 class AppServices {
   final HabitsRepository habits;
   final TimeRepository time;
-  final FocusSessionsRepository sessions;
+  final SubjectsRepository subjects;
   final StatsRepository stats;
   final ProfileRepository profile;
   final SettingsRepository settings;
@@ -27,7 +27,7 @@ class AppServices {
   const AppServices({
     required this.habits,
     required this.time,
-    required this.sessions,
+    required this.subjects,
     required this.stats,
     required this.profile,
     required this.settings,
@@ -42,7 +42,7 @@ class AppServices {
     return AppServices(
       habits: MockHabitsRepository(db),
       time: MockTimeRepository(db),
-      sessions: MockFocusSessionsRepository(db),
+      subjects: MockSubjectsRepository(db),
       stats: MockStatsRepository(db),
       profile: MockProfileRepository(db),
       settings: MockSettingsRepository(db),
@@ -54,7 +54,7 @@ class AppServices {
   factory AppServices.live(LocalDb ldb) {
     final habits = SqliteHabitsRepository(ldb);
     final time = SqliteTimeRepository(ldb);
-    final sessions = SqliteFocusSessionsRepository(ldb);
+    final subjects = SqliteSubjectsRepository(ldb);
     final profile = SqliteProfileRepository(ldb);
     final settings = SqliteSettingsRepository(ldb);
     final stats = SqliteStatsRepository(habits, time, profile);
@@ -62,7 +62,7 @@ class AppServices {
     final services = AppServices(
       habits: habits,
       time: time,
-      sessions: sessions,
+      subjects: subjects,
       stats: stats,
       profile: profile,
       settings: settings,
@@ -80,14 +80,14 @@ class AppServices {
       debounce = Timer(const Duration(milliseconds: 250), () async {
         await svc.notifications.rescheduleAll(
           habits: svc.habits.all.value,
-          sessions: svc.sessions.all.value,
+          subjects: svc.subjects.all.value,
           settings: svc.settings.settings.value,
         );
-        await FocusSessionForegroundController.reconcile(svc.sessions.all.value);
+        await FocusSessionForegroundController.reconcile(svc.subjects.all.value);
       });
     }
     svc.habits.all.addListener(reschedule);
-    svc.sessions.all.addListener(reschedule);
+    svc.subjects.all.addListener(reschedule);
     svc.settings.settings.addListener(reschedule);
   }
 

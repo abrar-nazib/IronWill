@@ -1,6 +1,6 @@
-# IronWill Project Guide
+# LockedIn Project Guide
 
-IronWill is a productivity and discipline app focused on two core mechanics:
+LockedIn is a productivity and discipline app focused on two core mechanics:
 
 1. **Time Utilization Tracker.** Every focused hour is split into four 15 minute blocks. Each block carries a colour coded "utilization" record on a red to amber to green ramp. Non focus blocks are blue. Inside an active focus session the Android app surfaces a soft alarm so the user logs the just completed quarter on time.
 2. **Habit Tracker.** One row per habit, one cell per day. Each cell carries a colour coded utilization for that day. The dashboard surfaces streaks and weekly or monthly stats. Reminders fire for predefined focus sessions and habits.
@@ -16,7 +16,7 @@ The product is a single Flutter app (Android primary; Linux desktop and Web are 
 ## Repo layout
 
 ```
-IronWill/
+LockedIn/
 ├── apps/
 │   └── ironwill/                 the Flutter app (always run from here)
 ├── Docs/                      original spec PDFs (do not edit)
@@ -158,10 +158,10 @@ Tabular figures must be enabled (`featureSet: tnum`) wherever numbers stack. Tha
 
 The app is fully offline. No network. Choices that drove the architecture:
 
-* **SQLite via `sqflite` (Android) and `sqflite_common_ffi` (Linux desktop)** for typed, queryable persistence. Schema lives in [lib/data/local_db.dart](apps/ironwill/lib/data/local_db.dart). Current schema version is `2`. Bump when columns or tables change and add an `ALTER` block to `_onUpgrade`.
+* **SQLite via `sqflite` (Android) and `sqflite_common_ffi` (Linux desktop)** for typed, queryable persistence. Schema lives in [lib/data/local_db.dart](apps/ironwill/lib/data/local_db.dart). Current schema version is `5`. Bump when columns or tables change and add an `ALTER` block to `_onUpgrade`. See "Schema history" at the bottom for what each version added.
 * **Repositories** in [lib/data/repositories.dart](apps/ironwill/lib/data/repositories.dart) are interface-driven. Mock impls live in [mock_repositories.dart](apps/ironwill/lib/data/mock_repositories.dart) and SQLite impls in [sqlite_repositories.dart](apps/ironwill/lib/data/sqlite_repositories.dart). The UI imports the abstract interfaces only.
 * **Reads through `ValueListenable` streams.** Every list-shaped repository exposes a `ValueNotifier` that the UI binds to via `ValueListenableBuilder`. Writes update the notifier so listeners rebuild without manual `setState` plumbing.
-* **JSON export and import** in [lib/data/backup.dart](apps/ironwill/lib/data/backup.dart). One file, all tables, format string `"manup-backup"` plus an integer version. Import wipes and replaces; we may add a merge-mode later. The export is shared via the system share sheet (`share_plus`); import picks via `file_picker`.
+* **JSON export and import** in [lib/data/backup.dart](apps/ironwill/lib/data/backup.dart). One file, all tables, format string `"lockedin-backup"` plus an integer version. The reader still accepts the legacy `manup-backup` and `ironwill-backup` strings so older exports import cleanly. Import wipes and replaces; we may add a merge-mode later. The export is shared via the system share sheet (`share_plus`); import picks via `file_picker`.
 
 ## Notifications and reminders
 
@@ -173,7 +173,7 @@ This is the gnarly part on Android because of Doze and OEM modifications.
   * Controller: [lib/services/focus_session_service.dart](apps/ironwill/lib/services/focus_session_service.dart).
   * Manifest: a `<service>` declaration for `com.pravera.flutter_foreground_task.service.ForegroundService` plus `FOREGROUND_SERVICE` and `FOREGROUND_SERVICE_DATA_SYNC` permissions.
   * Lifecycle: `FocusSessionForegroundController.reconcile(sessions)` is called on every app start, on every app resume, and after any habit/session/setting write. It starts the service if a session is currently inside its scheduled window and stops it when no session is live. Idempotent on each call.
-* **Channel ids vary by chosen sound** (`manup_session_<sound>`, `manup_habit_<sound>`). Android freezes a channel's sound at first post; varying the id lets the user switch sounds without having to clear notification settings. Channels are pre-created at `init()` time so `show()` and `zonedSchedule()` always have a place to land.
+* **Channel ids vary by chosen sound** (`lockedin_session_<sound>`, `lockedin_habit_<sound>`). Android freezes a channel's sound at first post; varying the id lets the user switch sounds without having to clear notification settings. Channels are pre-created at `init()` time so `show()` and `zonedSchedule()` always have a place to land.
 * **Time conversions**: do NOT use `tz.local` for wall clock arithmetic. The `timezone` package's local zone defaults to UTC unless explicitly initialised, and `DateTime.now().timeZoneName` returns abbreviations like "BDT" that the IANA database does not know. Always build wall-clock times as system-local `DateTime`s and convert at the boundary via `tz.TZDateTime.from(dt, tz.local)`. The absolute moment is preserved regardless of what `tz.local` happens to be.
 
 ## Coding conventions
@@ -183,7 +183,8 @@ This is the gnarly part on Android because of Doze and OEM modifications.
 * Routing: `go_router` with a single `ShellRoute` for the bottom nav scaffold.
 * No hardcoded colours, sizes, or strings inside widgets. Pull from `AppTokens`, `AppText`, and `Strings`.
 * No `print` statements committed (use `debugPrint` if anything).
-* Screens own seeded data via `lib/data/mock.dart` during the mock phase. Models (`Habit`, `FocusSession`, `TimeBlock`) live in `lib/models/`.
+* Screens own seeded data via `lib/data/mock_db.dart` during the mock phase. Models (`Habit`, `Subject`, `SubjectBlock`, `DayBlocks`, `HabitField`) live in `lib/models/models.dart`.
+* Default day pickers select **all 7 days**. The user deselects what they don't want; we don't ship "Weekdays" / "Every day" shortcut buttons because users couldn't tell they were tappable.
 * Comments: skip "what" comments; only document non obvious "why". Public APIs without a clear name get a short doc comment.
 
 ## Working with the design reviewer agent
@@ -195,3 +196,38 @@ Iterate until the agent's verdict is "ship ready", or the user explicitly accept
 ## Accepted deviations
 
 (empty: no deviations approved yet)
+
+## Schema history
+
+Each version's `_onUpgrade` step is in [lib/data/local_db.dart](apps/ironwill/lib/data/local_db.dart). The fresh-install `_onCreate` reflects the latest version directly.
+
+* **v1**: original. `habits`, `habit_logs`, `time_blocks`, `focus_sessions`, `profile`, `settings`.
+* **v2**: `habits.description`, `habit_logs.note`, `settings.theme_mode`, `settings.onboarded`.
+* **v3**: `focus_sessions` replaced by `subjects` + `subject_blocks`. A subject is the umbrella term ("Math", "Workout") and owns N scheduled blocks across weekdays. `subjects.expires_at` carries a TTL so a schedule decays after `LocalDb.defaultExpiryDays` (7) unless the user presses "Repeat next week". `habits.metadata` (TEXT JSON) is added; structured fields like `{"PU":"intList"}` go here. `settings.block_size_minutes` (default 30, allowed 15/30/60), `settings.pomodoro_enabled` (default 0), `settings.pomodoro_percent` (default 15) added.
+* **v4**: `profile.weekly_focus_minutes_csv` (Mon..Sun, 7 ints comma-separated, default `240` × 7) supersedes the single `daily_focus_minutes_target`. Per-weekday focus targets, capped 0..1440 min so a SAT/GRE-prep user can set 12-hour days. The legacy `daily_focus_minutes_target` column stays as a max-summary for older readers.
+* **v5**: `habit_logs.metadata` (TEXT JSON, default `{}`) holds per-day values for the structured fields the user defined on the parent habit. Values can be string, int, bool, list of int, list of bool.
+
+The backup importer in [lib/data/backup.dart](apps/ironwill/lib/data/backup.dart) is forward-compatible with the legacy `manup-backup` and `ironwill-backup` format strings AND the legacy `focus_sessions` field (it migrates each focus_session into a subject + N blocks at import time). Single-value `daily_focus_minutes_target` is expanded to 7 weekdays. Habit rows without `metadata` get `{}`. So the user's old export imports cleanly into the new schema.
+
+## App branding
+
+LockedIn (formerly ManUp / IronWill). The user-visible label, applicationId, DB filename, notification channel ids, and backup format string are all `lockedin`-prefixed. The folder is still `apps/ironwill/` for build-path stability — that's a paper cut, not a correctness issue. The legacy strings are accepted on import only, never written.
+
+## Phase progress (LockedIn pivot, started 2026-05-08)
+
+| Phase | Status | What it shipped |
+|---|---|---|
+| 1 | done | Rename to LockedIn (label, applicationId, DB, channels, backup format). Logo: borderless fist v3, padded so the adaptive icon mask doesn't crop. APK output renamed to `LockedIn-debug.apk` / `LockedIn-release.apk` via Gradle `outputFileName`. |
+| 2 | done | Schema v3. `Subject` + `SubjectBlock` models replace `FocusSession`. Multi-block-per-day allowed. Schedule TTL with "+1 week" / "Repeat next week" buttons. Notifications + foreground service consume `subjects`. `currentlyActiveBlock` helper replaces `currentlyActiveSession`. |
+| 2.5 | done | Schema v4. `weeklyFocusMinutes` per-weekday target editor under Settings → Focus targets. 0..1440 min cap. Focus streak respects per-day target (0-min day is a free pass, doesn't break the streak). |
+| 3 | done | Block-size selector (15/30/60) inline on the Time tab and in Settings. Storage stays at 15-min sub-blocks; render aggregates by averaging utilisation percentages and rounding to the nearest tier. Smart picker snaps to the chosen block size. FAB label adapts ("Log this hour" / "Log this 30 min" / "Log this quarter"). |
+| 4 | done | Pomodoro: per-block toggle in the floating timer dialog AND on the subject editor. Settings → Pomodoro for the global default (toggle + 5..50% slider). Notifications: when pomodoro is on, the accountability tick fires once at rest start instead of every quarter. In-app timer pill switches from ember to steel during rest with a coffee glyph; the floating dialog flips its emphasized block to ember and shows "REST PERIOD". |
+| 5 | done | Schema v5. Habit `metadata.fields` defines tracking schema (e.g. `PU: intList`). The habit log sheet shows a typed editor per field (text / number / yes-no / list of numbers / list of yes-no). Habit detail screen has a "Tracking fields" card showing the last 14 logged days plus a per-field summary line ("total 37 reps" / "avg 25" / "5/7 yes"). |
+| 6 | pending | Design review pass against `screenshots/` references. |
+| 7 | pending | E2E smoke test on web + device, ship release APK. |
+
+## Open knowns / not-yet-fixed
+
+* The web-server flutter device requires the Dart Debug Chrome extension to bootstrap; we use `flutter build web` + a static HTTP server when smoke-testing in Playwright instead.
+* The persistent foreground notification updates at 1 Hz to render the dual timer live. That's noticeable battery on long sessions; we may bump to 2 s if users complain.
+* The Radio widget pair in `_FieldEditorDialog` uses the pre-3.32 API (`groupValue`, `onChanged`); migrate to `RadioGroup` when we move to a newer Flutter SDK.

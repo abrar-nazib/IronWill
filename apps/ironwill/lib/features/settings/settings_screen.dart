@@ -38,8 +38,8 @@ class SettingsScreen extends StatelessWidget {
               const _SectionTitle('Focus'),
               _SimpleRow(
                 icon: LucideIcons.target,
-                label: 'Daily focus minimum',
-                trailing: '${profile.dailyFocusMinutesTarget} min',
+                label: 'Focus targets',
+                trailing: '${profile.targetForToday()} min today',
                 onTap: () => context.push('/settings/focus-minimum'),
               ),
               _SimpleRow(
@@ -56,9 +56,17 @@ class SettingsScreen extends StatelessWidget {
               ),
               _SimpleRow(
                 icon: LucideIcons.clockArrowUp,
-                label: 'Focus sessions',
+                label: 'Subjects',
                 trailing: 'Manage',
-                onTap: () => context.push('/settings/sessions'),
+                onTap: () => context.push('/settings/subjects'),
+              ),
+              _SimpleRow(
+                icon: LucideIcons.timer,
+                label: 'Pomodoro',
+                trailing: s.pomodoroEnabled
+                    ? 'On  ·  ${s.pomodoroPercent}%'
+                    : 'Off',
+                onTap: () => context.push('/settings/pomodoro'),
               ),
               const SizedBox(height: Sp.lg),
               const _SectionTitle('Habits'),
@@ -213,7 +221,7 @@ class _ProfileCard extends StatelessWidget {
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 Text(profile.name, style: AppText.title.copyWith(color: t.ink)),
-                Text('Daily focus minimum  ·  ${profile.dailyFocusMinutesTarget} min',
+                Text('Today\'s focus target  ·  ${profile.targetForToday()} min',
                     style: AppText.label.copyWith(color: t.inkMuted)),
               ],
             ),

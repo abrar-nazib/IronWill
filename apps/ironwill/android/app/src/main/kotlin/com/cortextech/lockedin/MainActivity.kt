@@ -1,4 +1,4 @@
-package com.cortextech.manup.manup
+package com.cortextech.lockedin
 
 import io.flutter.embedding.android.FlutterActivity
 

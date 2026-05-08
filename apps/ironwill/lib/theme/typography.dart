@@ -1,7 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
 
-/// IronWill type ramp.
+/// LockedIn type ramp.
 ///
 /// * Display + headline use **Hanken Grotesk**: sharper geometric grotesk,
 ///   strong stems, tighter joins than Inter. The masculine, editorial register.

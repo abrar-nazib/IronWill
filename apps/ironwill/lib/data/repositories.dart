@@ -24,8 +24,10 @@ abstract class HabitsRepository {
   Future<void> archive(String id);
   Future<void> unarchive(String id);
   Future<void> reorder(List<String> ids);
-  Future<void> logToday(String habitId, Utilization u, {String note});
-  Future<void> logDay(String habitId, DateTime day, Utilization u, {String note});
+  Future<void> logToday(String habitId, Utilization u,
+      {String note, Map<String, Object?> metadata});
+  Future<void> logDay(String habitId, DateTime day, Utilization u,
+      {String note, Map<String, Object?> metadata});
   Future<HabitLog?> getLog(String habitId, DateTime day);
 }
 
@@ -36,14 +38,33 @@ abstract class TimeRepository {
   Future<void> logQuarter(DateTime date, int quarterIndex, Utilization u);
 }
 
-abstract class FocusSessionsRepository {
-  ValueListenable<List<FocusSession>> get all;
+abstract class SubjectsRepository {
+  /// All subjects with their blocks eagerly loaded, sorted by `ord` ascending.
+  /// This includes expired subjects: callers filter on `Subject.isLiveOn(now)`
+  /// when they want only the active ones (e.g. notification scheduling).
+  ValueListenable<List<Subject>> get all;
 
-  Future<List<FocusSession>> listAll();
-  Future<FocusSession?> getById(String id);
-  Future<FocusSession> create(FocusSessionDraft draft);
-  Future<FocusSession> update(FocusSession s);
+  Future<List<Subject>> listAll();
+  Future<Subject?> getById(String id);
+
+  /// Create a new subject. The draft's blocks are inserted in one transaction
+  /// so the returned [Subject] already has its blocks populated.
+  Future<Subject> create(SubjectDraft draft);
+
+  /// Update a subject's name, expires_at, ord (NOT its blocks). To mutate
+  /// blocks, call addBlock/updateBlock/deleteBlock.
+  Future<Subject> update(Subject s);
+
   Future<void> delete(String id);
+
+  Future<SubjectBlock> addBlock(String subjectId, SubjectBlockDraft draft);
+  Future<SubjectBlock> updateBlock(SubjectBlock block);
+  Future<void> deleteBlock(String blockId);
+
+  /// Extend a subject's expiry by [LocalDb.defaultExpiryDays] days. Idempotent
+  /// in the sense that pressing it twice extends twice; the user controls how
+  /// many weeks ahead the schedule runs.
+  Future<Subject> repeatNextWeek(String subjectId);
 }
 
 abstract class StatsRepository {

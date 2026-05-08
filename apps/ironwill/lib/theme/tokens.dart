@@ -1,6 +1,6 @@
 import 'package:flutter/material.dart';
 
-/// Semantic design tokens for IronWill. All colours, spacing, radii, and
+/// Semantic design tokens for LockedIn. All colours, spacing, radii, and
 /// utilization data colours flow through this single extension. Feature code
 /// must read these via `Theme.of(context).extension<AppTokens>()` and never
 /// hardcode hex values, font names, or magic paddings.

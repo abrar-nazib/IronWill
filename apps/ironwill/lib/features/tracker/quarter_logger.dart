@@ -2,7 +2,6 @@ import 'package:flutter/material.dart';
 
 import '../../theme/tokens.dart';
 import '../../theme/typography.dart';
-import 'log_block_sheet.dart';
 
 /// Decide which quarter the user means when they tap "Log this quarter".
 ///
@@ -14,23 +13,41 @@ import 'log_block_sheet.dart';
 ///   one.
 class SmartQuarterPicker {
   final DateTime Function() now;
-  const SmartQuarterPicker({DateTime Function()? now}) : now = now ?? DateTime.now;
+
+  /// 15 / 30 / 60. Storage stays at 15-min granularity; the picker snaps to
+  /// the first 15-min quarter of the current display block. The caller writes
+  /// the same utilization to all sub-quarters in that block.
+  final int blockSizeMinutes;
+  const SmartQuarterPicker({
+    DateTime Function()? now,
+    this.blockSizeMinutes = 15,
+  }) : now = now ?? DateTime.now;
+
+  int get _stride => blockSizeMinutes == 60
+      ? 4
+      : (blockSizeMinutes == 30 ? 2 : 1);
 
   Future<int?> pick(BuildContext context) async {
     final t = now();
+    final stride = _stride;
     final currentQ = t.hour * 4 + (t.minute ~/ 15);
-    final minIntoQuarter = t.minute % 15;
-    if (minIntoQuarter >= 5 || currentQ == 0) return currentQ;
-    return await _askPreviousOrCurrent(context, currentQ);
+    final blockFirstQ = currentQ - (currentQ % stride);
+    final minutesIntoBlock = (currentQ - blockFirstQ) * 15 + (t.minute % 15);
+    if (minutesIntoBlock >= 5 || blockFirstQ == 0) return blockFirstQ;
+    return await _askPreviousOrCurrent(context, blockFirstQ);
   }
 
-  Future<int?> _askPreviousOrCurrent(BuildContext context, int currentQ) {
-    final prev = currentQ - 1;
+  Future<int?> _askPreviousOrCurrent(BuildContext context, int currentBlockFirstQ) {
+    final prev = currentBlockFirstQ - _stride;
     return showModalBottomSheet<int>(
       context: context,
       isScrollControlled: true,
       backgroundColor: context.tokens.surface,
-      builder: (ctx) => _ChoiceSheet(prev: prev, current: currentQ),
+      builder: (ctx) => _ChoiceSheet(
+        prev: prev,
+        current: currentBlockFirstQ,
+        blockSizeMinutes: blockSizeMinutes,
+      ),
     );
   }
 }
@@ -38,7 +55,24 @@ class SmartQuarterPicker {
 class _ChoiceSheet extends StatelessWidget {
   final int prev;
   final int current;
-  const _ChoiceSheet({required this.prev, required this.current});
+  final int blockSizeMinutes;
+  const _ChoiceSheet({
+    required this.prev,
+    required this.current,
+    required this.blockSizeMinutes,
+  });
+
+  String _label(int firstQ) {
+    final startMin = firstQ * 15;
+    final endMin = startMin + blockSizeMinutes;
+    final sh = startMin ~/ 60;
+    final sm = startMin % 60;
+    final eh = endMin ~/ 60;
+    final em = endMin % 60;
+    String fmt(int h, int m) =>
+        '${h.toString().padLeft(2, '0')}:${m.toString().padLeft(2, '0')}';
+    return '${fmt(sh, sm)}–${fmt(eh, em)}';
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -65,21 +99,22 @@ class _ChoiceSheet extends StatelessWidget {
             Text('Which block?', style: AppText.headline.copyWith(color: t.ink)),
             const SizedBox(height: Sp.xs),
             Text(
-              'A new 15 minute block just started. Tell me which one you mean.',
+              'A new $blockSizeMinutes minute block just started. Tell me which one you mean.',
               style: AppText.body.copyWith(color: t.inkMuted),
             ),
             const SizedBox(height: Sp.md),
-            _Choice(
-              label: 'The block that just ended',
-              subtitle: quarterLabel(prev),
-              hint: 'Logging the past quarter, fully complete',
-              onTap: () => Navigator.of(context).pop(prev),
-            ),
-            const SizedBox(height: Sp.s),
+            if (prev >= 0)
+              _Choice(
+                label: 'The block that just ended',
+                subtitle: _label(prev),
+                hint: 'Log the past block, fully complete',
+                onTap: () => Navigator.of(context).pop(prev),
+              ),
+            if (prev >= 0) const SizedBox(height: Sp.s),
             _Choice(
               label: 'The block in progress',
-              subtitle: quarterLabel(current),
-              hint: 'Logging the current quarter early',
+              subtitle: _label(current),
+              hint: 'Log the current block early',
               onTap: () => Navigator.of(context).pop(current),
             ),
             const SizedBox(height: Sp.s),

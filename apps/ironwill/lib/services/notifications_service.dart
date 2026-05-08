@@ -45,13 +45,13 @@ class NotificationsService {
   }
 
   static const habitChannelName = 'Habit reminders';
-  static const sessionChannelName = 'Focus session';
+  static const sessionChannelName = 'Subject block';
 
   /// Channel ids vary by chosen sound so a sound change takes effect without
   /// forcing the user to clear notification settings. The channel is created
   /// lazily on first post for that sound.
-  String _habitChannel(AlarmSound s) => 'manup_habit_${s.name}';
-  String _sessionChannel(AlarmSound s) => 'manup_session_${s.name}';
+  String _habitChannel(AlarmSound s) => 'lockedin_habit_${s.name}';
+  String _sessionChannel(AlarmSound s) => 'lockedin_session_${s.name}';
 
   /// Notification id ranges:
   /// - 1000..1999: habit reminders
@@ -149,7 +149,7 @@ class NotificationsService {
 
   Future<void> rescheduleAll({
     required List<Habit> habits,
-    required List<FocusSession> sessions,
+    required List<Subject> subjects,
     required AppSettings settings,
   }) async {
     if (!_ready || !(Platform.isAndroid || Platform.isIOS)) return;
@@ -166,9 +166,12 @@ class NotificationsService {
     final now = DateTime.now();
     for (int dayOffset = 0; dayOffset < 7; dayOffset++) {
       final date = DateTime(now.year, now.month, now.day + dayOffset);
-      for (final s in sessions) {
-        if (!s.daysOfWeek.contains(date.weekday)) continue;
-        await _scheduleSessionForDay(s, date, settings.alarm);
+      for (final s in subjects) {
+        if (!s.isLiveOn(date)) continue;
+        for (final b in s.blocks) {
+          if (b.dayOfWeek != date.weekday) continue;
+          await _scheduleBlockForDay(s, b, date, settings);
+        }
       }
     }
     // The persistent "session active" notification is now driven by a proper
@@ -183,7 +186,7 @@ class NotificationsService {
     if (!_ready || !(Platform.isAndroid || Platform.isIOS)) return;
     await _plugin.show(
       9999,
-      'IronWill test notification',
+      'LockedIn test notification',
       'If you see this with sound, your reminders are wired correctly.',
       _details(
         channel: _habitChannel(alarm),
@@ -211,20 +214,51 @@ class NotificationsService {
     );
   }
 
-  Future<void> _scheduleSessionForDay(
-    FocusSession s,
+  Future<void> _scheduleBlockForDay(
+    Subject subject,
+    SubjectBlock block,
     DateTime date,
-    AlarmSound alarm,
+    AppSettings settings,
   ) async {
-    final start = DateTime(date.year, date.month, date.day, s.start.hour, s.start.minute);
-    final end = DateTime(date.year, date.month, date.day, s.end.hour, s.end.minute);
+    final start = DateTime(
+        date.year, date.month, date.day, block.start.hour, block.start.minute);
+    final end = DateTime(
+        date.year, date.month, date.day, block.end.hour, block.end.minute);
     if (!end.isAfter(start)) return;
     final now = DateTime.now();
     final dayKey = date.day + date.month * 31;
+    final alarm = settings.alarm;
 
-    // The persistent "session active" notification is owned by the foreground
-    // service (FocusSessionForegroundController), not this scheduler. The
-    // scheduler only handles the 15-minute quarter ticks.
+    // Per-block pomodoro override the global default. When on, the
+    // accountability prompt fires once at the start of the rest period
+    // instead of one prompt per 15-minute mark.
+    final pomoOn = block.pomodoroEnabled || settings.pomodoroEnabled;
+    final pomoPercent = block.pomodoroEnabled
+        ? block.pomodoroPercent
+        : settings.pomodoroPercent;
+
+    if (pomoOn) {
+      final restMinutes =
+          ((end.difference(start).inMinutes * pomoPercent) / 100).round();
+      if (restMinutes > 0 && restMinutes < end.difference(start).inMinutes) {
+        final restStart = end.subtract(Duration(minutes: restMinutes));
+        if (restStart.isAfter(now)) {
+          await _plugin.zonedSchedule(
+            sessionTickId(subject.id, dayKey, 0),
+            'Rest now  ·  ${subject.name}',
+            'Log the focus block, then $restMinutes min rest.',
+            _local(restStart),
+            _details(
+                channel: _sessionChannel(alarm),
+                channelName: sessionChannelName,
+                alarm: alarm),
+            androidScheduleMode: AndroidScheduleMode.exactAllowWhileIdle,
+            payload: 'session_tick:${subject.id}',
+          );
+        }
+      }
+      return;
+    }
 
     // Quarter ticks: at start+15, start+30, ..., end. Skip ticks already passed.
     var tick = start.add(const Duration(minutes: 15));
@@ -232,13 +266,16 @@ class NotificationsService {
     while (!tick.isAfter(end)) {
       if (tick.isAfter(now)) {
         await _plugin.zonedSchedule(
-          sessionTickId(s.id, dayKey, qIndex),
-          'Quarter ended  ·  ${s.name}',
+          sessionTickId(subject.id, dayKey, qIndex),
+          'Quarter ended  ·  ${subject.name}',
           'Log how the last 15 minutes went. Tap to open the tracker.',
           _local(tick),
-          _details(channel: _sessionChannel(alarm), channelName: sessionChannelName, alarm: alarm),
+          _details(
+              channel: _sessionChannel(alarm),
+              channelName: sessionChannelName,
+              alarm: alarm),
           androidScheduleMode: AndroidScheduleMode.exactAllowWhileIdle,
-          payload: 'session_tick:${s.id}',
+          payload: 'session_tick:${subject.id}',
         );
       }
       tick = tick.add(const Duration(minutes: 15));

@@ -3,7 +3,6 @@ import 'dart:async';
 import 'package:flutter_foreground_task/flutter_foreground_task.dart';
 
 import '../models/models.dart';
-import '../widgets/session_active_pill.dart' show currentlyActiveSession;
 
 /// Foreground service that anchors a system-tray persistent notification while
 /// any focus session is in its scheduled window. Behaves like the flashlight
@@ -22,9 +21,9 @@ class FocusSessionForegroundController {
     if (_initialised) return;
     FlutterForegroundTask.init(
       androidNotificationOptions: AndroidNotificationOptions(
-        channelId: 'manup_focus_service',
-        channelName: 'Focus session (active)',
-        channelDescription: 'Persistent notification while a focus session is running.',
+        channelId: 'lockedin_focus_service',
+        channelName: 'Active focus block',
+        channelDescription: 'Persistent notification while a subject block is in progress.',
         channelImportance: NotificationChannelImportance.LOW,
         priority: NotificationPriority.LOW,
       ),
@@ -44,36 +43,32 @@ class FocusSessionForegroundController {
     _initialised = true;
   }
 
-  /// Reconcile the live state. If a session is active and the service is not
-  /// running, start it. If no session is active and the service is running,
-  /// stop it. Idempotent on each call. After start/update, the active
-  /// session's start and end (epoch ms) are sent to the task isolate so its
-  /// 1Hz repeat tick can render a live dual timer in the notification.
-  static Future<void> reconcile(List<FocusSession> sessions) async {
+  /// Reconcile the live state. If a non-expired subject's block is active and
+  /// the service is not running, start it. If no block is active and the
+  /// service is running, stop it. Idempotent on each call. After start/update,
+  /// the active block's start and end (epoch ms) are sent to the task isolate
+  /// so its 1Hz repeat tick can render a live dual timer in the notification.
+  static Future<void> reconcile(List<Subject> subjects) async {
     init();
     final running = await FlutterForegroundTask.isRunningService;
-    final active = currentlyActiveSession(sessions);
+    final active = currentlyActiveBlock(subjects, DateTime.now());
     if (active == null) {
       if (running) {
         await FlutterForegroundTask.stopService();
       }
       return;
     }
-    final now = DateTime.now();
-    final today = DateTime(now.year, now.month, now.day);
-    final start = today.add(Duration(hours: active.start.hour, minutes: active.start.minute));
-    final end = today.add(Duration(hours: active.end.hour, minutes: active.end.minute));
-    final initialBody = _renderBody(start, end, now);
+    final initialBody = _renderBody(active.startAt, active.endAt, DateTime.now());
     if (running) {
       await FlutterForegroundTask.updateService(
-        notificationTitle: 'Focus: ${active.name}',
+        notificationTitle: 'Focus: ${active.subject.name}',
         notificationText: initialBody,
       );
     } else {
       await FlutterForegroundTask.startService(
         serviceId: _serviceId,
         serviceTypes: const [ForegroundServiceTypes.dataSync],
-        notificationTitle: 'Focus: ${active.name}',
+        notificationTitle: 'Focus: ${active.subject.name}',
         notificationText: initialBody,
         notificationButtons: const [
           NotificationButton(id: 'log', text: 'Log quarter'),
@@ -82,9 +77,9 @@ class FocusSessionForegroundController {
       );
     }
     FlutterForegroundTask.sendDataToTask({
-      'startMs': start.millisecondsSinceEpoch,
-      'endMs': end.millisecondsSinceEpoch,
-      'name': active.name,
+      'startMs': active.startAt.millisecondsSinceEpoch,
+      'endMs': active.endAt.millisecondsSinceEpoch,
+      'name': active.subject.name,
     });
   }
 

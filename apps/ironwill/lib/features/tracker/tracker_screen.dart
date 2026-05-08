@@ -50,7 +50,8 @@ class _TrackerScreenState extends State<TrackerScreen> {
     _consumedLogIntent = true;
     WidgetsBinding.instance.addPostFrameCallback((_) async {
       if (!mounted) return;
-      final picked = await const SmartQuarterPicker().pick(context);
+      final size = AppServices.of(context).settings.settings.value.blockSizeMinutes;
+      final picked = await SmartQuarterPicker(blockSizeMinutes: size).pick(context);
       if (!mounted) return;
       if (picked != null) {
         final day = await _dayFuture;
@@ -152,29 +153,54 @@ class _TrackerScreenState extends State<TrackerScreen> {
           },
         ),
       ),
-      floatingActionButton: FloatingActionButton.extended(
-        icon: const Icon(LucideIcons.bellRing),
-        label: const Text('Log this quarter'),
-        onPressed: () async {
-          final picked = await const SmartQuarterPicker().pick(context);
-          if (picked == null || !mounted) return;
-          final day = await _dayFuture;
-          if (!mounted) return;
-          await _logQuarter(day, picked);
+      floatingActionButton: ValueListenableBuilder<AppSettings>(
+        valueListenable: AppServices.of(context).settings.settings,
+        builder: (_, settings, __) {
+          final size = settings.blockSizeMinutes;
+          final label = size == 60
+              ? 'Log this hour'
+              : (size == 30 ? 'Log this 30 min' : 'Log this quarter');
+          return FloatingActionButton.extended(
+            icon: const Icon(LucideIcons.bellRing),
+            label: Text(label),
+            onPressed: () async {
+              final picked = await SmartQuarterPicker(blockSizeMinutes: size)
+                  .pick(context);
+              if (picked == null || !mounted) return;
+              final day = await _dayFuture;
+              if (!mounted) return;
+              await _logQuarter(day, picked);
+            },
+          );
         },
       ),
     );
   }
 
-  Future<void> _logQuarter(DayBlocks day, int index) async {
+  /// [firstIndex] is the FIRST 15-minute quarter inside the tapped block.
+  /// When the user is on 30 or 60 min view, the same chosen utilization is
+  /// written to all sub-quarters in that block so the storage stays
+  /// consistent and switching views back to 15 min preserves the data.
+  Future<void> _logQuarter(DayBlocks day, int firstIndex) async {
     final svc = AppServices.of(context);
+    final blockSize = svc.settings.settings.value.blockSizeMinutes;
+    final stride = blockSize == 60 ? 4 : (blockSize == 30 ? 2 : 1);
+    final aggregated = aggregateQuartersInBlock(
+      quarters: day.quarters,
+      firstQuarterIndex: firstIndex,
+      stride: stride,
+    );
     final picked = await showLogBlockSheet(
       context,
-      current: day.quarters[index],
-      quarterIndex: index,
+      current: aggregated,
+      quarterIndex: firstIndex,
     );
     if (picked == null) return;
-    await svc.time.logQuarter(_date, index, picked);
+    for (var i = 0; i < stride; i++) {
+      final idx = firstIndex + i;
+      if (idx >= 96) break;
+      await svc.time.logQuarter(_date, idx, picked);
+    }
     if (!mounted) return;
     setState(() {
       _dayFuture = svc.time.getDay(_date);
@@ -248,18 +274,99 @@ class _GridCard extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final t = context.tokens;
-    return AppCard(
-      padding: const EdgeInsets.all(Sp.md),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          const SectionHeader('24 hour grid'),
-          Text('Each row is one hour, four 15 minute quarters.',
-              style: AppText.label.copyWith(color: t.inkMuted)),
-          const SizedBox(height: Sp.md),
-          QuarterGrid(quarters: day.quarters, onTap: onTap),
-        ],
-      ),
+    final svc = AppServices.of(context);
+    return ValueListenableBuilder<AppSettings>(
+      valueListenable: svc.settings.settings,
+      builder: (_, settings, __) {
+        final size = settings.blockSizeMinutes;
+        final cellsPerRow =
+            size == 60 ? 1 : (size == 30 ? 2 : 4);
+        return AppCard(
+          padding: const EdgeInsets.all(Sp.md),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              SectionHeader(
+                '24 hour grid',
+                trailing: _BlockSizePicker(
+                  current: size,
+                  onPick: (v) => svc.settings
+                      .update(settings.copyWith(blockSizeMinutes: v)),
+                ),
+              ),
+              Text(
+                size == 15
+                    ? 'Each row is one hour, four 15 minute quarters.'
+                    : (size == 30
+                        ? 'Each row is one hour, two 30 minute halves.'
+                        : 'Each row is one hour. Tap to log the whole hour.'),
+                style: AppText.label.copyWith(color: t.inkMuted),
+              ),
+              const SizedBox(height: Sp.md),
+              QuarterGrid(
+                quarters: day.quarters,
+                blockSizeMinutes: size,
+                onTap: onTap,
+              ),
+              if (cellsPerRow != 4) ...[
+                const SizedBox(height: Sp.s),
+                Text(
+                  'Stored as 15 min sub-blocks. Switch back any time without losing data.',
+                  style: AppText.label.copyWith(
+                    color: t.inkMuted,
+                    fontSize: 11,
+                  ),
+                ),
+              ],
+            ],
+          ),
+        );
+      },
+    );
+  }
+}
+
+class _BlockSizePicker extends StatelessWidget {
+  final int current;
+  final ValueChanged<int> onPick;
+  const _BlockSizePicker({required this.current, required this.onPick});
+
+  @override
+  Widget build(BuildContext context) {
+    final t = context.tokens;
+    Widget chip(int value, String label) {
+      final selected = value == current;
+      return InkWell(
+        borderRadius: BorderRadius.circular(R.s),
+        onTap: () => onPick(value),
+        child: Container(
+          padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+          decoration: BoxDecoration(
+            color: selected ? t.ink : Colors.transparent,
+            borderRadius: BorderRadius.circular(R.s),
+            border: Border.all(color: selected ? t.ink : t.divider),
+          ),
+          child: Text(
+            label,
+            style: AppText.label.copyWith(
+              color: selected ? t.bg : t.inkMuted,
+              fontWeight: FontWeight.w700,
+              fontSize: 11,
+            ),
+          ),
+        ),
+      );
+    }
+
+    return Row(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        chip(15, '15m'),
+        const SizedBox(width: 4),
+        chip(30, '30m'),
+        const SizedBox(width: 4),
+        chip(60, '1h'),
+      ],
     );
   }
 }

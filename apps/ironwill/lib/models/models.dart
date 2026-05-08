@@ -37,6 +37,12 @@ class Habit {
   final String id;
   final String name;
   final String description;
+
+  /// Structured key/value pairs for tracking habit-specific data (e.g. exercise
+  /// reps: `{'PU': [15, 12, 10], 'BC': [20, 12, 10]}`). Values can be any
+  /// JSON-encodable shape: `String`, `num`, `bool`, `List`, or nested `Map`.
+  /// The editor exposes a typed picker per key so users don't hand-edit JSON.
+  final Map<String, Object?> metadata;
   final HabitCadence cadence;
   final List<int> customDays;
   final IconData glyph;
@@ -53,6 +59,7 @@ class Habit {
     required this.id,
     required this.name,
     this.description = '',
+    this.metadata = const <String, Object?>{},
     required this.cadence,
     this.customDays = const [],
     required this.glyph,
@@ -69,6 +76,7 @@ class Habit {
   Habit copyWith({
     String? name,
     String? description,
+    Map<String, Object?>? metadata,
     HabitCadence? cadence,
     List<int>? customDays,
     IconData? glyph,
@@ -85,6 +93,7 @@ class Habit {
       id: id,
       name: name ?? this.name,
       description: description ?? this.description,
+      metadata: metadata ?? this.metadata,
       cadence: cadence ?? this.cadence,
       customDays: customDays ?? this.customDays,
       glyph: glyph ?? this.glyph,
@@ -104,12 +113,90 @@ class HabitLog {
   final DateTime day;
   final Utilization utilization;
   final String note;
-  const HabitLog({required this.day, required this.utilization, this.note = ''});
+
+  /// Structured values for the habit's tracking fields on this specific day.
+  /// Keys match `Habit.fields[].key`; values can be `String`, `int`, `bool`,
+  /// `List<int>`, `List<bool>`, `List<String>`. Persisted as JSON in the
+  /// habit_logs.metadata column.
+  final Map<String, Object?> metadata;
+  const HabitLog({
+    required this.day,
+    required this.utilization,
+    this.note = '',
+    this.metadata = const <String, Object?>{},
+  });
 }
+
+/// Type of a habit's structured tracking field. Each habit can declare its
+/// own list of fields so the user records the right shape per day (e.g.,
+/// pushup reps as a list of ints, "did warmup" as a bool).
+enum HabitFieldType {
+  text,
+  number,
+  boolean,
+  intList,
+  boolList,
+}
+
+extension HabitFieldTypeX on HabitFieldType {
+  String get label => switch (this) {
+        HabitFieldType.text => 'Text',
+        HabitFieldType.number => 'Number',
+        HabitFieldType.boolean => 'Yes / No',
+        HabitFieldType.intList => 'List of numbers',
+        HabitFieldType.boolList => 'List of yes / no',
+      };
+
+  String get hint => switch (this) {
+        HabitFieldType.text => 'e.g. "Felt strong"',
+        HabitFieldType.number => 'e.g. 25',
+        HabitFieldType.boolean => 'true or false',
+        HabitFieldType.intList => 'e.g. 15, 12, 10',
+        HabitFieldType.boolList => 'e.g. yes, yes, no',
+      };
+}
+
+/// One tracking field declared on a [Habit]. The user defines these once on
+/// the habit, then records values for them on each [HabitLog].
+class HabitField {
+  final String key;
+  final HabitFieldType type;
+  const HabitField({required this.key, required this.type});
+
+  Map<String, Object?> toJson() => {'key': key, 'type': type.name};
+
+  static HabitField? fromJson(Object? raw) {
+    if (raw is! Map) return null;
+    final k = raw['key'];
+    final t = raw['type'];
+    if (k is! String || t is! String) return null;
+    final type = HabitFieldType.values.firstWhere(
+      (e) => e.name == t,
+      orElse: () => HabitFieldType.text,
+    );
+    return HabitField(key: k, type: type);
+  }
+}
+
+/// Read the `fields` list out of a habit's metadata map. Returns an empty
+/// list when malformed; the editor seeds the metadata with the right shape.
+List<HabitField> parseHabitFields(Map<String, Object?> metadata) {
+  final raw = metadata['fields'];
+  if (raw is! List) return const [];
+  return raw
+      .map(HabitField.fromJson)
+      .whereType<HabitField>()
+      .toList();
+}
+
+/// Build a habit metadata map from the user's field list.
+Map<String, Object?> habitMetadataFromFields(List<HabitField> fields) =>
+    {'fields': fields.map((f) => f.toJson()).toList()};
 
 class HabitDraft {
   String name;
   String description;
+  Map<String, Object?> metadata;
   HabitCadence cadence;
   List<int> customDays;
   IconData glyph;
@@ -118,67 +205,176 @@ class HabitDraft {
   HabitDraft({
     this.name = '',
     this.description = '',
+    Map<String, Object?>? metadata,
     this.cadence = HabitCadence.daily,
     this.customDays = const [],
     required this.glyph,
     required this.reminder,
     this.reminderOn = true,
-  });
+  }) : metadata = metadata ?? <String, Object?>{};
 }
 
-class FocusSession {
+/// A "Subject" is the umbrella term for what the user is locking in on.
+/// It owns one or more [SubjectBlock]s scheduled across the week. The
+/// academic framing fits exam-prep users, but the term generalises to any
+/// time-bounded pursuit (workout, reading, side project).
+///
+/// Each subject carries an [expiresAt] date. A schedule decays after
+/// [LocalDb.defaultExpiryDays] from creation; the user extends with a
+/// "Repeat next week" action. After expiry the subject's blocks no longer
+/// fire reminders or count as active sessions.
+class Subject {
   final String id;
   final String name;
-  final TimeOfDay start;
-  final TimeOfDay end;
-  final List<int> daysOfWeek;
-  final List<Utilization> quarters;
 
-  const FocusSession({
+  /// Inclusive: a subject is considered active on every day up to and
+  /// including this date. Stored as ISO `YYYY-MM-DD` in SQLite.
+  final DateTime expiresAt;
+  final DateTime createdAt;
+  final int order;
+  final List<SubjectBlock> blocks;
+
+  const Subject({
     required this.id,
     required this.name,
-    required this.start,
-    required this.end,
-    this.daysOfWeek = const [1, 2, 3, 4, 5, 6, 7],
-    required this.quarters,
+    required this.expiresAt,
+    required this.createdAt,
+    required this.order,
+    this.blocks = const [],
   });
 
-  int get totalQuarters => quarters.length;
-  int get loggedFocusedQuarters =>
-      quarters.where((q) => q == Utilization.good || q == Utilization.full).length;
-  int get focusedMinutes => _weightedFocusedMinutes(quarters);
-  int get loggedQuarters =>
-      quarters.where((q) => q != Utilization.none).length;
-
-  FocusSession copyWith({
-    String? name,
-    TimeOfDay? start,
-    TimeOfDay? end,
-    List<int>? daysOfWeek,
-    List<Utilization>? quarters,
-  }) {
-    return FocusSession(
-      id: id,
-      name: name ?? this.name,
-      start: start ?? this.start,
-      end: end ?? this.end,
-      daysOfWeek: daysOfWeek ?? this.daysOfWeek,
-      quarters: quarters ?? this.quarters,
-    );
+  /// True if today is within (or before) the subject's expiry date.
+  bool isLiveOn(DateTime now) {
+    final today = DateTime(now.year, now.month, now.day);
+    final exp = DateTime(expiresAt.year, expiresAt.month, expiresAt.day);
+    return !today.isAfter(exp);
   }
+
+  Subject copyWith({
+    String? name,
+    DateTime? expiresAt,
+    int? order,
+    List<SubjectBlock>? blocks,
+  }) =>
+      Subject(
+        id: id,
+        name: name ?? this.name,
+        expiresAt: expiresAt ?? this.expiresAt,
+        createdAt: createdAt,
+        order: order ?? this.order,
+        blocks: blocks ?? this.blocks,
+      );
 }
 
-class FocusSessionDraft {
-  String name;
-  TimeOfDay start;
-  TimeOfDay end;
-  List<int> daysOfWeek;
-  FocusSessionDraft({
-    this.name = '',
+/// A single scheduled block inside a [Subject]. Multiple blocks can fall on
+/// the same weekday under different subjects, or even under the same subject
+/// (e.g. "Math at 9-10am AND 4-5pm both on Monday").
+class SubjectBlock {
+  final String id;
+  final String subjectId;
+
+  /// 1 = Monday, 7 = Sunday (matches [DateTime.weekday]).
+  final int dayOfWeek;
+  final TimeOfDay start;
+  final TimeOfDay end;
+  final bool pomodoroEnabled;
+
+  /// Percentage of the block's duration reserved as a pomodoro rest at the
+  /// end. Default 15%. Clamped 5..50 in the editor.
+  final int pomodoroPercent;
+
+  const SubjectBlock({
+    required this.id,
+    required this.subjectId,
+    required this.dayOfWeek,
     required this.start,
     required this.end,
-    this.daysOfWeek = const [1, 2, 3, 4, 5, 6, 7],
+    this.pomodoroEnabled = false,
+    this.pomodoroPercent = 15,
   });
+
+  int get startMinute => start.hour * 60 + start.minute;
+  int get endMinute => end.hour * 60 + end.minute;
+  int get durationMinutes => endMinute - startMinute;
+
+  SubjectBlock copyWith({
+    int? dayOfWeek,
+    TimeOfDay? start,
+    TimeOfDay? end,
+    bool? pomodoroEnabled,
+    int? pomodoroPercent,
+  }) =>
+      SubjectBlock(
+        id: id,
+        subjectId: subjectId,
+        dayOfWeek: dayOfWeek ?? this.dayOfWeek,
+        start: start ?? this.start,
+        end: end ?? this.end,
+        pomodoroEnabled: pomodoroEnabled ?? this.pomodoroEnabled,
+        pomodoroPercent: pomodoroPercent ?? this.pomodoroPercent,
+      );
+}
+
+class SubjectBlockDraft {
+  int dayOfWeek;
+  TimeOfDay start;
+  TimeOfDay end;
+  bool pomodoroEnabled;
+  int pomodoroPercent;
+  SubjectBlockDraft({
+    required this.dayOfWeek,
+    required this.start,
+    required this.end,
+    this.pomodoroEnabled = false,
+    this.pomodoroPercent = 15,
+  });
+}
+
+class SubjectDraft {
+  String name;
+  DateTime expiresAt;
+  List<SubjectBlockDraft> blocks;
+  SubjectDraft({
+    this.name = '',
+    required this.expiresAt,
+    this.blocks = const [],
+  });
+}
+
+/// A live focus block: the subject context, the block being run, and the
+/// concrete start/end [DateTime]s on the current day. Returned by
+/// [currentlyActiveBlock] when "now" falls inside a non-expired subject's
+/// scheduled block.
+class ActiveBlock {
+  final Subject subject;
+  final SubjectBlock block;
+  final DateTime startAt;
+  final DateTime endAt;
+  const ActiveBlock({
+    required this.subject,
+    required this.block,
+    required this.startAt,
+    required this.endAt,
+  });
+}
+
+/// Find the (single) block currently active across all subjects, if any.
+/// Skips expired subjects so stale schedules don't fire reminders.
+/// Picks the first block whose [startAt, endAt) range contains [now].
+ActiveBlock? currentlyActiveBlock(List<Subject> subjects, DateTime now) {
+  final today = DateTime(now.year, now.month, now.day);
+  for (final s in subjects) {
+    if (!s.isLiveOn(now)) continue;
+    for (final b in s.blocks) {
+      if (b.dayOfWeek != now.weekday) continue;
+      final start = today.add(Duration(hours: b.start.hour, minutes: b.start.minute));
+      final end = today.add(Duration(hours: b.end.hour, minutes: b.end.minute));
+      if (!now.isBefore(start) && now.isBefore(end)) {
+        return ActiveBlock(subject: s, block: b, startAt: start, endAt: end);
+      }
+    }
+  }
+  return null;
 }
 
 class DayBlocks {
@@ -216,29 +412,48 @@ class DayBlocks {
 
 class UserProfile {
   final String name;
-  final int dailyFocusMinutesTarget;
+
+  /// Per-weekday focus targets in minutes. Always length 7, indexed Mon..Sun
+  /// (i.e. `weeklyFocusMinutes[0]` is Monday, matching `DateTime.weekday - 1`).
+  /// Each value is clamped 0..1440 by the editor; a 0 means "no target today",
+  /// the streak counter treats it as a free day.
+  final List<int> weeklyFocusMinutes;
   final int focusStreakDays;
   final String? avatarLetter;
   final String timezone;
 
   const UserProfile({
     required this.name,
-    this.dailyFocusMinutesTarget = 240,
+    this.weeklyFocusMinutes = const [240, 240, 240, 240, 240, 240, 240],
     this.focusStreakDays = 0,
     this.avatarLetter,
     this.timezone = 'Local',
   });
 
+  /// Today's target. `dow` follows `DateTime.weekday` (1=Mon..7=Sun). Falls
+  /// back to the first entry if the list is malformed.
+  int targetForWeekday(int dow) {
+    final idx = (dow - 1).clamp(0, 6);
+    if (weeklyFocusMinutes.length != 7) {
+      return weeklyFocusMinutes.isNotEmpty ? weeklyFocusMinutes.first : 240;
+    }
+    return weeklyFocusMinutes[idx];
+  }
+
+  /// Convenience: the current weekday's target.
+  int targetForToday([DateTime? now]) =>
+      targetForWeekday((now ?? DateTime.now()).weekday);
+
   UserProfile copyWith({
     String? name,
-    int? dailyFocusMinutesTarget,
+    List<int>? weeklyFocusMinutes,
     int? focusStreakDays,
     String? avatarLetter,
     String? timezone,
   }) =>
       UserProfile(
         name: name ?? this.name,
-        dailyFocusMinutesTarget: dailyFocusMinutesTarget ?? this.dailyFocusMinutesTarget,
+        weeklyFocusMinutes: weeklyFocusMinutes ?? this.weeklyFocusMinutes,
         focusStreakDays: focusStreakDays ?? this.focusStreakDays,
         avatarLetter: avatarLetter ?? this.avatarLetter,
         timezone: timezone ?? this.timezone,
@@ -270,6 +485,20 @@ class AppSettings {
   final ThemeChoice themeMode;
   final bool onboarded;
 
+  /// Display granularity in the time tracker. Storage is always 15 minutes
+  /// (96 quarters per day) regardless: this is purely how blocks are rolled
+  /// up when rendering, so toggling between 15/30/60 is non-destructive.
+  /// Allowed values: 15, 30, 60. Default 30.
+  final int blockSizeMinutes;
+
+  /// Per-block default. Each [SubjectBlock] also has its own override; this
+  /// global default is what gets remembered for new blocks and is the floor
+  /// the floating-window toggle starts from.
+  final bool pomodoroEnabled;
+
+  /// Percent of a block reserved as pomodoro rest. Default 15. Clamped 5..50.
+  final int pomodoroPercent;
+
   const AppSettings({
     this.firstDay = FirstDayOfWeek.monday,
     this.alarm = AlarmSound.softChime,
@@ -278,6 +507,9 @@ class AppSettings {
     this.privacyLockOn = false,
     this.themeMode = ThemeChoice.system,
     this.onboarded = false,
+    this.blockSizeMinutes = 30,
+    this.pomodoroEnabled = false,
+    this.pomodoroPercent = 15,
   });
 
   AppSettings copyWith({
@@ -288,6 +520,9 @@ class AppSettings {
     bool? privacyLockOn,
     ThemeChoice? themeMode,
     bool? onboarded,
+    int? blockSizeMinutes,
+    bool? pomodoroEnabled,
+    int? pomodoroPercent,
   }) =>
       AppSettings(
         firstDay: firstDay ?? this.firstDay,
@@ -297,6 +532,9 @@ class AppSettings {
         privacyLockOn: privacyLockOn ?? this.privacyLockOn,
         themeMode: themeMode ?? this.themeMode,
         onboarded: onboarded ?? this.onboarded,
+        blockSizeMinutes: blockSizeMinutes ?? this.blockSizeMinutes,
+        pomodoroEnabled: pomodoroEnabled ?? this.pomodoroEnabled,
+        pomodoroPercent: pomodoroPercent ?? this.pomodoroPercent,
       );
 }
 

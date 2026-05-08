@@ -6,86 +6,244 @@ import '../../services/app_services.dart';
 import '../../theme/tokens.dart';
 import '../../theme/typography.dart';
 import '../../widgets/app_card.dart';
-import '../sessions/session_edit_sheet.dart';
+import '../subjects/subject_edit_sheet.dart';
 
-class FocusMinimumScreen extends StatelessWidget {
+/// Per-weekday focus targets. The user can set a different number of minutes
+/// for each day (e.g. lighter weekends, all-out weekdays). Numeric input is
+/// clamped 0..1440 (24 hours), so a SAT/GRE-prep user can set 720 min (12 hr)
+/// without fighting the UI.
+class FocusMinimumScreen extends StatefulWidget {
   const FocusMinimumScreen({super.key});
+
+  @override
+  State<FocusMinimumScreen> createState() => _FocusMinimumScreenState();
+}
+
+class _FocusMinimumScreenState extends State<FocusMinimumScreen> {
+  static const _names = [
+    'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday',
+  ];
+
+  late List<TextEditingController> _ctls;
+  late List<int> _values;
+  bool _seeded = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _ctls = List.generate(7, (_) => TextEditingController());
+  }
+
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    if (_seeded) return;
+    final profile = AppServices.of(context).profile.profile.value;
+    final mins = profile.weeklyFocusMinutes.length == 7
+        ? profile.weeklyFocusMinutes
+        : List.filled(7, 240);
+    _values = List<int>.from(mins);
+    for (var i = 0; i < 7; i++) {
+      _ctls[i].text = _values[i].toString();
+    }
+    _seeded = true;
+  }
+
+  @override
+  void dispose() {
+    for (final c in _ctls) {
+      c.dispose();
+    }
+    super.dispose();
+  }
+
+  Future<void> _persist() async {
+    final svc = AppServices.of(context);
+    final p = svc.profile.profile.value;
+    await svc.profile.update(p.copyWith(weeklyFocusMinutes: List<int>.from(_values)));
+  }
+
+  void _setValue(int i, int v) {
+    setState(() {
+      _values[i] = v.clamp(0, 1440);
+      // Keep the controller in sync only when the value changed by clamping;
+      // otherwise leave it alone so the user can keep typing.
+      if (_ctls[i].text != _values[i].toString() &&
+          int.tryParse(_ctls[i].text) != _values[i]) {
+        _ctls[i].text = _values[i].toString();
+      }
+    });
+  }
+
+  String _hours(int mins) {
+    if (mins == 0) return 'rest day';
+    final h = mins ~/ 60;
+    final m = mins % 60;
+    if (h == 0) return '${m}m';
+    if (m == 0) return '${h}h';
+    return '${h}h ${m}m';
+  }
 
   @override
   Widget build(BuildContext context) {
     final t = context.tokens;
-    final svc = AppServices.of(context);
-    final options = const [60, 90, 120, 150, 180, 210, 240, 300, 360, 480];
+    final today = DateTime.now().weekday;
+    final weeklyTotal = _values.fold<int>(0, (a, b) => a + b);
     return Scaffold(
       backgroundColor: t.bg,
-      appBar: AppBar(title: const Text('Daily focus minimum')),
-      body: ValueListenableBuilder<UserProfile>(
-        valueListenable: svc.profile.profile,
-        builder: (_, p, __) => ListView(
-          padding: const EdgeInsets.fromLTRB(Sp.md, Sp.s, Sp.md, Sp.x4l),
-          children: [
-            AppCard(
-              color: t.ink,
-              padding: const EdgeInsets.all(Sp.lg),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text('CURRENT TARGET',
-                      style: Theme.of(context).textTheme.labelSmall?.copyWith(color: t.bg.withValues(alpha: 0.6))),
-                  const SizedBox(height: Sp.s),
-                  Row(
-                    crossAxisAlignment: CrossAxisAlignment.end,
-                    children: [
-                      Text('${p.dailyFocusMinutesTarget}',
-                          style: AppText.big.copyWith(color: t.bg, fontSize: 56)),
-                      const SizedBox(width: Sp.s),
-                      Padding(
-                        padding: const EdgeInsets.only(bottom: Sp.s),
-                        child: Text('min per day',
-                            style: AppText.title.copyWith(color: t.bg.withValues(alpha: 0.6))),
-                      ),
-                    ],
-                  ),
-                ],
+      appBar: AppBar(
+        title: const Text('Focus targets'),
+        actions: [
+          TextButton(
+            onPressed: () async {
+              final navigator = Navigator.of(context);
+              await _persist();
+              if (mounted) navigator.pop();
+            },
+            child: const Text('Save'),
+          ),
+        ],
+      ),
+      body: ListView(
+        padding: const EdgeInsets.fromLTRB(Sp.md, Sp.s, Sp.md, Sp.x4l),
+        children: [
+          AppCard(
+            color: t.ink,
+            padding: const EdgeInsets.all(Sp.lg),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text('WEEKLY TOTAL',
+                    style: Theme.of(context)
+                        .textTheme
+                        .labelSmall
+                        ?.copyWith(color: t.bg.withValues(alpha: 0.6))),
+                const SizedBox(height: Sp.s),
+                Row(
+                  crossAxisAlignment: CrossAxisAlignment.end,
+                  children: [
+                    Text(_hours(weeklyTotal),
+                        style: AppText.big.copyWith(color: t.bg, fontSize: 36)),
+                    const SizedBox(width: Sp.s),
+                    Padding(
+                      padding: const EdgeInsets.only(bottom: Sp.xs),
+                      child: Text('across 7 days',
+                          style: AppText.title
+                              .copyWith(color: t.bg.withValues(alpha: 0.6))),
+                    ),
+                  ],
+                ),
+              ],
+            ),
+          ),
+          const SizedBox(height: Sp.md),
+          Text('PER WEEKDAY (0..1440 min)',
+              style: Theme.of(context)
+                  .textTheme
+                  .labelSmall
+                  ?.copyWith(color: t.inkMuted)),
+          const SizedBox(height: Sp.s),
+          for (var i = 0; i < 7; i++)
+            Padding(
+              padding: const EdgeInsets.only(bottom: Sp.s),
+              child: _DayRow(
+                name: _names[i],
+                isToday: (i + 1) == today,
+                value: _values[i],
+                hoursLabel: _hours(_values[i]),
+                controller: _ctls[i],
+                onChanged: (raw) {
+                  final n = int.tryParse(raw);
+                  if (n == null) return;
+                  _setValue(i, n);
+                },
+                onBump: (delta) => _setValue(i, _values[i] + delta),
               ),
             ),
-            const SizedBox(height: Sp.md),
-            Text('PRESETS',
-                style: Theme.of(context).textTheme.labelSmall?.copyWith(color: t.inkMuted)),
-            const SizedBox(height: Sp.s),
-            for (final m in options)
-              Padding(
-                padding: const EdgeInsets.only(bottom: Sp.s),
-                child: AppCard(
-                  onTap: () => svc.profile.update(p.copyWith(dailyFocusMinutesTarget: m)),
-                  padding: const EdgeInsets.symmetric(horizontal: Sp.md, vertical: Sp.m),
-                  child: Row(
-                    children: [
-                      Container(
-                        width: 18, height: 18,
-                        decoration: BoxDecoration(
-                          shape: BoxShape.circle,
-                          border: Border.all(color: m == p.dailyFocusMinutesTarget ? t.ink : t.divider, width: 2),
-                          color: m == p.dailyFocusMinutesTarget ? t.ink : Colors.transparent,
-                        ),
-                        child: m == p.dailyFocusMinutesTarget
-                            ? Center(
-                                child: Container(
-                                  width: 8, height: 8,
-                                  decoration: BoxDecoration(color: t.bg, shape: BoxShape.circle),
-                                ),
-                              )
-                            : null,
-                      ),
-                      const SizedBox(width: Sp.m),
-                      Expanded(child: Text('$m min', style: AppText.bodyStrong.copyWith(color: t.ink))),
-                      Text('${(m / 60).toStringAsFixed(1)}h', style: AppText.mono.copyWith(color: t.inkMuted)),
-                    ],
-                  ),
-                ),
+        ],
+      ),
+    );
+  }
+}
+
+class _DayRow extends StatelessWidget {
+  final String name;
+  final bool isToday;
+  final int value;
+  final String hoursLabel;
+  final TextEditingController controller;
+  final ValueChanged<String> onChanged;
+  final void Function(int) onBump;
+  const _DayRow({
+    required this.name,
+    required this.isToday,
+    required this.value,
+    required this.hoursLabel,
+    required this.controller,
+    required this.onChanged,
+    required this.onBump,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final t = context.tokens;
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: Sp.md, vertical: Sp.s),
+      decoration: BoxDecoration(
+        color: t.surface,
+        borderRadius: BorderRadius.circular(R.s),
+        border: Border.all(color: isToday ? t.accent : t.divider),
+      ),
+      child: Row(
+        children: [
+          SizedBox(
+            width: 96,
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(name, style: AppText.bodyStrong.copyWith(color: t.ink)),
+                if (isToday)
+                  Text('TODAY',
+                      style: AppText.label.copyWith(
+                        color: t.accent,
+                        fontWeight: FontWeight.w700,
+                        fontSize: 10,
+                      )),
+              ],
+            ),
+          ),
+          IconButton(
+            icon: const Icon(LucideIcons.minus),
+            onPressed: () => onBump(-15),
+            tooltip: '-15 min',
+          ),
+          SizedBox(
+            width: 80,
+            child: TextField(
+              controller: controller,
+              textAlign: TextAlign.center,
+              keyboardType: TextInputType.number,
+              style: AppText.mono.copyWith(
+                color: t.ink,
+                fontSize: 16,
+                fontWeight: FontWeight.w700,
               ),
-          ],
-        ),
+              decoration: const InputDecoration(
+                isDense: true,
+                contentPadding: EdgeInsets.symmetric(vertical: 8),
+              ),
+              onChanged: onChanged,
+            ),
+          ),
+          IconButton(
+            icon: const Icon(LucideIcons.plus),
+            onPressed: () => onBump(15),
+            tooltip: '+15 min',
+          ),
+          const Spacer(),
+          Text(hoursLabel,
+              style: AppText.label.copyWith(color: t.inkMuted)),
+        ],
       ),
     );
   }
@@ -112,7 +270,7 @@ class AlarmSoundScreen extends StatelessWidget {
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
                   Text(
-                    'Plays at the end of each quarter inside an active focus session, so you log without breaking flow.',
+                    'Plays at every accountability tick during an active subject block, so you log without breaking flow.',
                     style: AppText.body.copyWith(color: t.inkMuted),
                   ),
                   const SizedBox(height: Sp.s),
@@ -417,8 +575,13 @@ class PrivacyLockScreen extends StatelessWidget {
   }
 }
 
-class FocusSessionsScreen extends StatelessWidget {
-  const FocusSessionsScreen({super.key});
+/// Global pomodoro defaults. Each [SubjectBlock] also has its own
+/// `pomodoroEnabled` / `pomodoroPercent` field; the per-block setting takes
+/// precedence so the user can tune individual blocks. The percent here is
+/// the default applied to new blocks AND the value shown when the floating
+/// dialog asks "do you want pomodoro for this block?".
+class PomodoroSettingsScreen extends StatelessWidget {
+  const PomodoroSettingsScreen({super.key});
 
   @override
   Widget build(BuildContext context) {
@@ -426,17 +589,112 @@ class FocusSessionsScreen extends StatelessWidget {
     final svc = AppServices.of(context);
     return Scaffold(
       backgroundColor: t.bg,
-      appBar: AppBar(title: const Text('Focus sessions')),
-      body: ValueListenableBuilder<List<FocusSession>>(
-        valueListenable: svc.sessions.all,
-        builder: (_, sessions, __) => ListView.separated(
+      appBar: AppBar(title: const Text('Pomodoro')),
+      body: ValueListenableBuilder<AppSettings>(
+        valueListenable: svc.settings.settings,
+        builder: (_, s, __) => ListView(
           padding: const EdgeInsets.fromLTRB(Sp.md, Sp.s, Sp.md, Sp.x4l),
-          itemCount: sessions.length + 1,
+          children: [
+            AppCard(
+              padding: const EdgeInsets.all(Sp.md),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Row(
+                    children: [
+                      Expanded(
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Text('Default: pomodoro on for new blocks',
+                                style: AppText.bodyStrong.copyWith(color: t.ink)),
+                            const SizedBox(height: 2),
+                            Text(
+                              'New blocks will start with this setting. You can override per block from the floating timer or the subject editor.',
+                              style: AppText.label.copyWith(color: t.inkMuted),
+                            ),
+                          ],
+                        ),
+                      ),
+                      Switch.adaptive(
+                        value: s.pomodoroEnabled,
+                        onChanged: (v) =>
+                            svc.settings.update(s.copyWith(pomodoroEnabled: v)),
+                      ),
+                    ],
+                  ),
+                ],
+              ),
+            ),
+            const SizedBox(height: Sp.md),
+            AppCard(
+              padding: const EdgeInsets.all(Sp.md),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text('REST PERCENT (default for new blocks)',
+                      style: Theme.of(context)
+                          .textTheme
+                          .labelSmall
+                          ?.copyWith(color: t.inkMuted)),
+                  const SizedBox(height: Sp.s),
+                  Row(
+                    crossAxisAlignment: CrossAxisAlignment.end,
+                    children: [
+                      Text('${s.pomodoroPercent}',
+                          style: AppText.display
+                              .copyWith(color: t.ink, fontSize: 36)),
+                      const SizedBox(width: 4),
+                      Padding(
+                        padding: const EdgeInsets.only(bottom: 6),
+                        child: Text('% of each block',
+                            style: AppText.label.copyWith(color: t.inkMuted)),
+                      ),
+                    ],
+                  ),
+                  Slider(
+                    min: 5,
+                    max: 50,
+                    divisions: 9,
+                    value: s.pomodoroPercent.toDouble().clamp(5, 50),
+                    label: '${s.pomodoroPercent}%',
+                    onChanged: (v) => svc.settings
+                        .update(s.copyWith(pomodoroPercent: v.round())),
+                  ),
+                  Text(
+                    'Example: a 60 min block at ${s.pomodoroPercent}% gives ${(60 * s.pomodoroPercent / 100).round()} min of rest at the end.',
+                    style: AppText.label.copyWith(color: t.inkMuted),
+                  ),
+                ],
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class SubjectsScreen extends StatelessWidget {
+  const SubjectsScreen({super.key});
+
+  @override
+  Widget build(BuildContext context) {
+    final t = context.tokens;
+    final svc = AppServices.of(context);
+    return Scaffold(
+      backgroundColor: t.bg,
+      appBar: AppBar(title: const Text('Subjects')),
+      body: ValueListenableBuilder<List<Subject>>(
+        valueListenable: svc.subjects.all,
+        builder: (_, subjects, __) => ListView.separated(
+          padding: const EdgeInsets.fromLTRB(Sp.md, Sp.s, Sp.md, Sp.x4l),
+          itemCount: subjects.length + 1,
           separatorBuilder: (_, __) => const SizedBox(height: Sp.s),
           itemBuilder: (_, i) {
             if (i == 0) {
               return InkWell(
-                onTap: () => showSessionEditSheet(context),
+                onTap: () => showSubjectEditSheet(context),
                 borderRadius: BorderRadius.circular(R.s),
                 child: Container(
                   padding: const EdgeInsets.all(Sp.md),
@@ -458,9 +716,9 @@ class FocusSessionsScreen extends StatelessWidget {
                         child: Column(
                           crossAxisAlignment: CrossAxisAlignment.start,
                           children: [
-                            Text('Add a focus session',
+                            Text('Add a subject',
                                 style: AppText.bodyStrong.copyWith(color: t.ink)),
-                            Text('Name, start, end, days',
+                            Text('Name and a weekly schedule',
                                 style: AppText.label.copyWith(color: t.inkMuted)),
                           ],
                         ),
@@ -471,16 +729,20 @@ class FocusSessionsScreen extends StatelessWidget {
                 ),
               );
             }
-            final s = sessions[i - 1];
-            final daysLabel = s.daysOfWeek.length == 7
-                ? 'Every day'
-                : s.daysOfWeek.length == 5 && !s.daysOfWeek.contains(6) && !s.daysOfWeek.contains(7)
-                    ? 'Weekdays'
-                    : s.daysOfWeek
-                        .map((d) => const ['', 'M', 'T', 'W', 'T', 'F', 'S', 'S'][d])
-                        .join(' ');
+            final s = subjects[i - 1];
+            final today = DateTime.now();
+            final todayDate = DateTime(today.year, today.month, today.day);
+            final daysLeft = DateTime(s.expiresAt.year, s.expiresAt.month, s.expiresAt.day)
+                .difference(todayDate)
+                .inDays;
+            final blockSummary = s.blocks.isEmpty
+                ? 'No blocks scheduled'
+                : '${s.blocks.length} block${s.blocks.length == 1 ? '' : 's'} per week';
+            final ttlSummary = daysLeft >= 0
+                ? '$daysLeft day${daysLeft == 1 ? '' : 's'} left'
+                : 'Expired';
             return AppCard(
-              onTap: () => showSessionEditSheet(context, existing: s),
+              onTap: () => showSubjectEditSheet(context, existing: s),
               padding: const EdgeInsets.all(Sp.md),
               child: Row(
                 children: [
@@ -501,8 +763,9 @@ class FocusSessionsScreen extends StatelessWidget {
                       children: [
                         Text(s.name, style: AppText.bodyStrong.copyWith(color: t.ink)),
                         Text(
-                          '${s.start.format24()} to ${s.end.format24()}  ·  $daysLabel',
-                          style: AppText.label.copyWith(color: t.inkMuted),
+                          '$blockSummary  ·  $ttlSummary',
+                          style: AppText.label.copyWith(
+                              color: daysLeft < 0 ? t.accent : t.inkMuted),
                         ),
                       ],
                     ),
@@ -516,8 +779,4 @@ class FocusSessionsScreen extends StatelessWidget {
       ),
     );
   }
-}
-
-extension on TimeOfDay {
-  String format24() => '${hour.toString().padLeft(2, '0')}:${minute.toString().padLeft(2, '0')}';
 }
