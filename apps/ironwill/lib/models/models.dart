@@ -2,6 +2,21 @@ import 'package:flutter/material.dart';
 
 import 'utilization.dart';
 
+/// Sum of focused minutes across the given quarters, weighted by each block's
+/// utilization. A 100% quarter contributes 15 min, 75% → 11.25, 50% → 7.5,
+/// 25% → 3.75, 0% (wasted) → 0. Unlogged and non-focus quarters contribute
+/// nothing. The fractional sum is rounded to int at the end so partial credit
+/// accumulates honestly across many quarters instead of vanishing per block.
+int _weightedFocusedMinutes(List<Utilization> quarters) {
+  double mins = 0;
+  for (final q in quarters) {
+    final pct = q.percent;
+    if (pct == null) continue;
+    mins += pct * 15 / 100;
+  }
+  return mins.round();
+}
+
 enum HabitCadence {
   daily,
   weekdays,
@@ -131,7 +146,7 @@ class FocusSession {
   int get totalQuarters => quarters.length;
   int get loggedFocusedQuarters =>
       quarters.where((q) => q == Utilization.good || q == Utilization.full).length;
-  int get focusedMinutes => loggedFocusedQuarters * 15;
+  int get focusedMinutes => _weightedFocusedMinutes(quarters);
   int get loggedQuarters =>
       quarters.where((q) => q != Utilization.none).length;
 
@@ -173,8 +188,7 @@ class DayBlocks {
   const DayBlocks({required this.date, required this.quarters})
       : assert(quarters.length == 96 || quarters.length == 0);
 
-  int get focusedMinutes =>
-      quarters.where((q) => q == Utilization.good || q == Utilization.full).length * 15;
+  int get focusedMinutes => _weightedFocusedMinutes(quarters);
 
   int get plannedFocusedMinutes =>
       quarters.where((q) => q != Utilization.notFocus && q != Utilization.none).length * 15;

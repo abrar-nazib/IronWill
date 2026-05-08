@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:go_router/go_router.dart';
 import 'package:intl/intl.dart';
 import 'package:lucide_icons_flutter/lucide_icons.dart';
 
@@ -7,8 +8,8 @@ import '../../services/app_services.dart';
 import '../../theme/tokens.dart';
 import '../../theme/typography.dart';
 import '../../widgets/app_card.dart';
+import '../../widgets/active_session_timer.dart';
 import '../../widgets/quarter_grid.dart';
-import '../../widgets/session_active_pill.dart';
 import '../../widgets/utilization_legend.dart';
 import 'log_block_sheet.dart';
 import 'quarter_logger.dart';
@@ -23,12 +24,42 @@ class TrackerScreen extends StatefulWidget {
 class _TrackerScreenState extends State<TrackerScreen> {
   late DateTime _date;
   late Future<DayBlocks> _dayFuture;
+  bool _consumedLogIntent = false;
 
   @override
   void didChangeDependencies() {
     super.didChangeDependencies();
     _date = AppServices.of(context).time.today.value.date;
     _dayFuture = AppServices.of(context).time.getDay(_date);
+    _maybeConsumeLogIntent();
+  }
+
+  /// If the screen was navigated to with `?log=now` (from a 15-min tick
+  /// notification, a foreground-service tap, or the floating-window button),
+  /// open the smart quarter picker then the log sheet exactly once and clean
+  /// the URL afterwards. The flag resets the moment the URL no longer carries
+  /// `log=now`, so subsequent triggers on this same screen instance work too.
+  void _maybeConsumeLogIntent() {
+    final state = GoRouterState.of(context);
+    final wantLog = state.uri.queryParameters['log'] == 'now';
+    if (!wantLog) {
+      _consumedLogIntent = false;
+      return;
+    }
+    if (_consumedLogIntent) return;
+    _consumedLogIntent = true;
+    WidgetsBinding.instance.addPostFrameCallback((_) async {
+      if (!mounted) return;
+      final picked = await const SmartQuarterPicker().pick(context);
+      if (!mounted) return;
+      if (picked != null) {
+        final day = await _dayFuture;
+        if (!mounted) return;
+        await _logQuarter(day, picked);
+      }
+      if (!mounted) return;
+      context.go('/time');
+    });
   }
 
   void _setDate(DateTime d) {
@@ -98,7 +129,7 @@ class _TrackerScreenState extends State<TrackerScreen> {
                     sliver: SliverList.list(children: [
                       const Padding(
                         padding: EdgeInsets.only(bottom: Sp.m),
-                        child: SessionActivePill(),
+                        child: ActiveSessionTimer(),
                       ),
                       _TopMetrics(day: day),
                       const SizedBox(height: Sp.m),

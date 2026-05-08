@@ -33,6 +33,7 @@ dependencies:
 
   # Misc
   package_info_plus: ^8.2.0
+  wakelock_plus: ^1.2.10
 
 dev_dependencies:
   flutter_test:

@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:io';
 
 import 'package:flutter_local_notifications/flutter_local_notifications.dart';
@@ -20,6 +21,28 @@ import '../models/models.dart';
 class NotificationsService {
   final _plugin = FlutterLocalNotificationsPlugin();
   bool _ready = false;
+
+  /// Broadcast stream of notification payloads. Fires when the user taps any
+  /// scheduled notification while the app is foreground OR resumed. Cold-start
+  /// taps are surfaced via [consumeLaunchPayload] instead.
+  final StreamController<String> _actions = StreamController<String>.broadcast();
+  Stream<String> get onAction => _actions.stream;
+
+  /// Read the payload (if any) of the notification that launched the app from
+  /// a cold state. Returns null if the app was opened normally. Call this once
+  /// at startup; subsequent calls return null.
+  Future<String?> consumeLaunchPayload() async {
+    if (!(Platform.isAndroid || Platform.isIOS)) return null;
+    final details = await _plugin.getNotificationAppLaunchDetails();
+    if (details?.didNotificationLaunchApp != true) return null;
+    return details?.notificationResponse?.payload;
+  }
+
+  void _onResponse(NotificationResponse r) {
+    final p = r.payload;
+    if (p == null || p.isEmpty) return;
+    if (!_actions.isClosed) _actions.add(p);
+  }
 
   static const habitChannelName = 'Habit reminders';
   static const sessionChannelName = 'Focus session';
@@ -69,7 +92,10 @@ class NotificationsService {
         requestSoundPermission: false,
       ),
     );
-    await _plugin.initialize(init);
+    await _plugin.initialize(
+      init,
+      onDidReceiveNotificationResponse: _onResponse,
+    );
     if (Platform.isAndroid) {
       await _ensureChannelsForAllSounds();
       // Cancel any leftover legacy "session active" notifications scheduled

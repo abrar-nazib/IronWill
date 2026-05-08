@@ -32,6 +32,16 @@ android {
     buildTypes {
         release {
             signingConfig = signingConfigs.getByName("debug")
+            isMinifyEnabled = false
+            isShrinkResources = false
+        }
+    }
+
+    // Output APKs as IronWill-<buildType>.apk (e.g. IronWill-release.apk).
+    applicationVariants.all {
+        outputs.all {
+            val output = this as com.android.build.gradle.internal.api.BaseVariantOutputImpl
+            output.outputFileName = "IronWill-${buildType.name}.apk"
         }
     }
 }

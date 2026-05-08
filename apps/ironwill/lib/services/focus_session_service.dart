@@ -33,7 +33,9 @@ class FocusSessionForegroundController {
         playSound: false,
       ),
       foregroundTaskOptions: ForegroundTaskOptions(
-        eventAction: ForegroundTaskEventAction.repeat(60000), // 1 min
+        // 1 second so the persistent notification can re-render the dual timer
+        // (HH:MM:SS total + MM:SS to next quarter) live.
+        eventAction: ForegroundTaskEventAction.repeat(1000),
         autoRunOnBoot: false,
         allowWakeLock: false,
         allowWifiLock: false,
@@ -44,7 +46,9 @@ class FocusSessionForegroundController {
 
   /// Reconcile the live state. If a session is active and the service is not
   /// running, start it. If no session is active and the service is running,
-  /// stop it. Idempotent on each call.
+  /// stop it. Idempotent on each call. After start/update, the active
+  /// session's start and end (epoch ms) are sent to the task isolate so its
+  /// 1Hz repeat tick can render a live dual timer in the notification.
   static Future<void> reconcile(List<FocusSession> sessions) async {
     init();
     final running = await FlutterForegroundTask.isRunningService;
@@ -55,29 +59,60 @@ class FocusSessionForegroundController {
       }
       return;
     }
-    final endMin = active.end.hour * 60 + active.end.minute;
     final now = DateTime.now();
-    final remaining = endMin - (now.hour * 60 + now.minute);
-    final body = remaining > 0
-        ? 'Stay on it. ${remaining}m left. Tap to log a quarter.'
-        : 'Wrapping up.';
+    final today = DateTime(now.year, now.month, now.day);
+    final start = today.add(Duration(hours: active.start.hour, minutes: active.start.minute));
+    final end = today.add(Duration(hours: active.end.hour, minutes: active.end.minute));
+    final initialBody = _renderBody(start, end, now);
     if (running) {
       await FlutterForegroundTask.updateService(
         notificationTitle: 'Focus: ${active.name}',
-        notificationText: body,
+        notificationText: initialBody,
       );
-      return;
+    } else {
+      await FlutterForegroundTask.startService(
+        serviceId: _serviceId,
+        serviceTypes: const [ForegroundServiceTypes.dataSync],
+        notificationTitle: 'Focus: ${active.name}',
+        notificationText: initialBody,
+        notificationButtons: const [
+          NotificationButton(id: 'log', text: 'Log quarter'),
+        ],
+        callback: focusSessionTaskCallback,
+      );
     }
-    await FlutterForegroundTask.startService(
-      serviceId: _serviceId,
-      serviceTypes: const [ForegroundServiceTypes.dataSync],
-      notificationTitle: 'Focus: ${active.name}',
-      notificationText: body,
-      notificationButtons: const [
-        NotificationButton(id: 'log', text: 'Log quarter'),
-      ],
-      callback: focusSessionTaskCallback,
-    );
+    FlutterForegroundTask.sendDataToTask({
+      'startMs': start.millisecondsSinceEpoch,
+      'endMs': end.millisecondsSinceEpoch,
+      'name': active.name,
+    });
+  }
+
+  /// Same dual-timer string the in-app pill renders. Kept here as a static so
+  /// both isolates can render the same shape on first paint.
+  static String _renderBody(DateTime start, DateTime end, DateTime now) {
+    final total = _max(end.difference(now), Duration.zero);
+    final since = now.difference(start).inSeconds.clamp(0, 1 << 31);
+    final secondsToNext = 900 - (since % 900);
+    var toNext = Duration(seconds: secondsToNext);
+    if (toNext > total) toNext = total;
+    return 'Total ${_hms(total)}  ·  Log in ${_ms(toNext)}';
+  }
+
+  static Duration _max(Duration a, Duration b) => a > b ? a : b;
+  static String _hms(Duration d) {
+    final h = d.inHours;
+    final m = d.inMinutes.remainder(60);
+    final s = d.inSeconds.remainder(60);
+    return '${h.toString().padLeft(2, '0')}:'
+        '${m.toString().padLeft(2, '0')}:'
+        '${s.toString().padLeft(2, '0')}';
+  }
+
+  static String _ms(Duration d) {
+    final m = d.inMinutes;
+    final s = d.inSeconds.remainder(60);
+    return '${m.toString().padLeft(2, '0')}:${s.toString().padLeft(2, '0')}';
   }
 
   static Future<void> stop() async {
@@ -93,15 +128,36 @@ void focusSessionTaskCallback() {
 }
 
 class _FocusSessionTaskHandler extends TaskHandler {
+  int? _startMs;
+  int? _endMs;
+  String _name = 'Focus session';
+
   @override
   Future<void> onStart(DateTime timestamp, TaskStarter starter) async {}
 
   @override
+  void onReceiveData(Object data) {
+    if (data is! Map) return;
+    _startMs = (data['startMs'] as num?)?.toInt();
+    _endMs = (data['endMs'] as num?)?.toInt();
+    _name = (data['name'] as String?) ?? _name;
+    _refreshNotification();
+  }
+
+  @override
   void onRepeatEvent(DateTime timestamp) {
-    // The handler isolate has no DB access. We just keep the service alive so
-    // the persistent notification stays. The main isolate's reconcile() call
-    // (from app resume / data change) does the actual stop when the session
-    // window ends.
+    _refreshNotification();
+  }
+
+  void _refreshNotification() {
+    if (_startMs == null || _endMs == null) return;
+    final start = DateTime.fromMillisecondsSinceEpoch(_startMs!);
+    final end = DateTime.fromMillisecondsSinceEpoch(_endMs!);
+    final body = FocusSessionForegroundController._renderBody(start, end, DateTime.now());
+    FlutterForegroundTask.updateService(
+      notificationTitle: 'Focus: $_name',
+      notificationText: body,
+    );
   }
 
   @override
@@ -111,11 +167,13 @@ class _FocusSessionTaskHandler extends TaskHandler {
   void onNotificationButtonPressed(String id) {
     if (id == 'log') {
       FlutterForegroundTask.launchApp('/time');
+      FlutterForegroundTask.sendDataToMain('open_log');
     }
   }
 
   @override
   void onNotificationPressed() {
     FlutterForegroundTask.launchApp('/time');
+    FlutterForegroundTask.sendDataToMain('open_log');
   }
 }

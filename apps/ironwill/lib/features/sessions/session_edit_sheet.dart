@@ -45,9 +45,44 @@ class _SessionEditSheetState extends State<_SessionEditSheet> {
     super.dispose();
   }
 
+  int _toMin(TimeOfDay t) => t.hour * 60 + t.minute;
+
+  void _showError(String msg) {
+    ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+      content: Text(msg),
+      duration: const Duration(seconds: 3),
+    ));
+  }
+
   Future<void> _save() async {
-    if (_name.text.trim().isEmpty) return;
+    if (_name.text.trim().isEmpty) {
+      _showError('Give the session a name.');
+      return;
+    }
+    if (_days.isEmpty) {
+      _showError('Pick at least one day of the week.');
+      return;
+    }
+    if (_toMin(_end) <= _toMin(_start)) {
+      _showError('End time must be after start time.');
+      return;
+    }
     final svc = AppServices.of(context);
+    final existingSessions = svc.sessions.all.value;
+    final conflict = _findOverlap(
+      existingSessions,
+      ignoreId: widget.existing?.id,
+      start: _toMin(_start),
+      end: _toMin(_end),
+      days: _days,
+    );
+    if (conflict != null) {
+      _showError(
+        'Overlaps with "${conflict.name}" '
+        '(${_fmt(conflict.start)} – ${_fmt(conflict.end)}).',
+      );
+      return;
+    }
     if (widget.existing == null) {
       await svc.sessions.create(FocusSessionDraft(
         name: _name.text.trim(),
@@ -64,6 +99,30 @@ class _SessionEditSheetState extends State<_SessionEditSheet> {
       ));
     }
     if (mounted) Navigator.of(context).pop();
+  }
+
+  String _fmt(TimeOfDay t) =>
+      '${t.hour.toString().padLeft(2, '0')}:${t.minute.toString().padLeft(2, '0')}';
+
+  /// Returns the first existing session whose weekday set intersects [days]
+  /// AND whose minute-of-day range overlaps [start, end). Excludes [ignoreId]
+  /// so editing a session does not collide with itself.
+  FocusSession? _findOverlap(
+    List<FocusSession> all, {
+    required String? ignoreId,
+    required int start,
+    required int end,
+    required List<int> days,
+  }) {
+    for (final s in all) {
+      if (s.id == ignoreId) continue;
+      final sharedDay = s.daysOfWeek.any(days.contains);
+      if (!sharedDay) continue;
+      final sStart = _toMin(s.start);
+      final sEnd = _toMin(s.end);
+      if (start < sEnd && sStart < end) return s;
+    }
+    return null;
   }
 
   @override
@@ -110,9 +169,30 @@ class _SessionEditSheetState extends State<_SessionEditSheet> {
               const SizedBox(height: Sp.lg),
               Row(
                 children: [
-                  Expanded(child: _TimeBox(label: 'Start', value: _start, onPick: (v) => setState(() => _start = v))),
+                  Expanded(
+                    child: _TimeBox(
+                      label: 'Start',
+                      value: _start,
+                      onPick: (v) {
+                        setState(() {
+                          _start = v;
+                          if (_toMin(_end) <= _toMin(_start)) {
+                            final endMin =
+                                (_toMin(_start) + 60).clamp(0, 23 * 60 + 59);
+                            _end = TimeOfDay(hour: endMin ~/ 60, minute: endMin % 60);
+                          }
+                        });
+                      },
+                    ),
+                  ),
                   const SizedBox(width: Sp.m),
-                  Expanded(child: _TimeBox(label: 'End', value: _end, onPick: (v) => setState(() => _end = v))),
+                  Expanded(
+                    child: _TimeBox(
+                      label: 'End',
+                      value: _end,
+                      onPick: (v) => setState(() => _end = v),
+                    ),
+                  ),
                 ],
               ),
               const SizedBox(height: Sp.lg),

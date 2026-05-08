@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
@@ -22,6 +24,7 @@ void main() async {
   }
 
   AppServices services;
+  String? launchPayload;
   if (kIsWeb) {
     services = AppServices.mock();
   } else {
@@ -29,6 +32,7 @@ void main() async {
     await seedIfFirstRun(ldb);
     services = AppServices.live(ldb);
     await services.notifications.init();
+    launchPayload = await services.notifications.consumeLaunchPayload();
     await services.notifications.requestPermissions();
     FocusSessionForegroundController.init();
     await services.notifications.rescheduleAll(
@@ -39,12 +43,13 @@ void main() async {
     await FocusSessionForegroundController.reconcile(services.sessions.all.value);
   }
 
-  runApp(IronWillApp(services: services));
+  runApp(IronWillApp(services: services, launchPayload: launchPayload));
 }
 
 class IronWillApp extends StatefulWidget {
   final AppServices services;
-  const IronWillApp({super.key, required this.services});
+  final String? launchPayload;
+  const IronWillApp({super.key, required this.services, this.launchPayload});
 
   @override
   State<IronWillApp> createState() => _IronWillAppState();
@@ -52,17 +57,56 @@ class IronWillApp extends StatefulWidget {
 
 class _IronWillAppState extends State<IronWillApp> with WidgetsBindingObserver {
   late final _router = buildRouter(widget.services);
+  StreamSubscription<String>? _notifSub;
+  Timer? _reconcileTicker;
 
   @override
   void initState() {
     super.initState();
     WidgetsBinding.instance.addObserver(this);
+    _notifSub = widget.services.notifications.onAction.listen(_handleAction);
+    if (widget.launchPayload != null) {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        _handleAction(widget.launchPayload!);
+      });
+    }
+    if (!kIsWeb) {
+      FlutterForegroundTask.addTaskDataCallback(_handleForegroundTaskData);
+      // Catch session start/end transitions while the app is open across the
+      // boundary. Without this, the foreground service only starts when the
+      // user re-opens the app or saves a session/habit.
+      _reconcileTicker = Timer.periodic(const Duration(seconds: 30), (_) {
+        FocusSessionForegroundController.reconcile(
+          widget.services.sessions.all.value,
+        );
+      });
+    }
   }
 
   @override
   void dispose() {
+    _reconcileTicker?.cancel();
+    _notifSub?.cancel();
+    if (!kIsWeb) {
+      FlutterForegroundTask.removeTaskDataCallback(_handleForegroundTaskData);
+    }
     WidgetsBinding.instance.removeObserver(this);
     super.dispose();
+  }
+
+  void _handleForegroundTaskData(Object data) {
+    if (data is String) _handleAction(data);
+  }
+
+  /// Maps a notification payload to a route. Today: any session-tick or
+  /// log-from-foreground-service tap routes to `/time?log=now`, which the
+  /// tracker screen interprets as "open the smart quarter picker now."
+  void _handleAction(String payload) {
+    if (payload.startsWith('session_tick:') || payload == 'open_log') {
+      _router.go('/time?log=now');
+    } else if (payload.startsWith('habit:')) {
+      _router.go('/habits');
+    }
   }
 
   @override

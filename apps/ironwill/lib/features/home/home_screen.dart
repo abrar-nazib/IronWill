@@ -8,9 +8,9 @@ import '../../models/utilization.dart';
 import '../../services/app_services.dart';
 import '../../theme/tokens.dart';
 import '../../theme/typography.dart';
+import '../../widgets/active_session_timer.dart';
 import '../../widgets/app_card.dart';
 import '../../widgets/quarter_grid.dart';
-import '../../widgets/session_active_pill.dart';
 import '../../widgets/streak_pill.dart';
 import '../habits/habit_edit_sheet.dart';
 import '../habits/habit_log_sheet.dart';
@@ -86,9 +86,9 @@ class HomeScreen extends StatelessWidget {
         SliverPadding(
           padding: const EdgeInsets.fromLTRB(Sp.md, 0, Sp.md, Sp.x4l),
           sliver: SliverList.list(children: [
-            Padding(
-              padding: const EdgeInsets.only(bottom: Sp.m),
-              child: SessionActivePill(onTap: () => context.go('/time')),
+            const Padding(
+              padding: EdgeInsets.only(bottom: Sp.m),
+              child: ActiveSessionTimer(),
             ),
             _HeroFocusCard(),
             const SizedBox(height: Sp.m),
