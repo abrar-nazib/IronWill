@@ -604,12 +604,14 @@ class SqliteStatsRepository implements StatsRepository {
   final HabitsRepository _habits;
   final TimeRepository _time;
   final ProfileRepository _profile;
+  final SubjectsRepository _subjects;
   final DateTime Function() _now;
   final ValueNotifier<int> _focusStreakDays = ValueNotifier<int>(0);
   SqliteStatsRepository(
     this._habits,
     this._time,
-    this._profile, {
+    this._profile,
+    this._subjects, {
     DateTime Function()? now,
   }) : _now = now ?? DateTime.now {
     _time.today.addListener(_recomputeStreak);
@@ -684,12 +686,119 @@ class SqliteStatsRepository implements StatsRepository {
     final avgCompletion = habits.isEmpty
         ? 0
         : (habits.fold<int>(0, (a, h) => a + h.completionRate) ~/ habits.length);
+
+    // Best / worst day indices.
+    var bestIdx = -1;
+    var bestMin = -1;
+    var worstIdx = -1;
+    var worstMin = 1 << 30;
+    for (var i = 0; i < mins.length; i++) {
+      final m = mins[i];
+      if (m > bestMin) {
+        bestMin = m;
+        bestIdx = i;
+      }
+      if (m > 0 && m < worstMin) {
+        worstMin = m;
+        worstIdx = i;
+      }
+    }
+    if (bestMin == 0) bestIdx = -1;
+
+    // Per-day target hit rate.
+    final profile = await _profile.get();
+    var goalHit = 0;
+    var evaluated = 0;
+    for (var i = 0; i < days.length; i++) {
+      final target = profile.targetForWeekday(days[i].date.weekday);
+      if (target <= 0) continue;
+      evaluated++;
+      if (mins[i] >= target) goalHit++;
+    }
+
+    // Average utilization of logged blocks.
+    var pctSum = 0;
+    var pctCount = 0;
+    for (final d in days) {
+      for (final q in d.quarters) {
+        final p = q.percent;
+        if (p != null) {
+          pctSum += p;
+          pctCount++;
+        }
+      }
+    }
+    final avgUtil = pctCount == 0 ? 0 : (pctSum / pctCount).round();
+
+    // Minutes per hour-of-day (24 ints). 100% quarter = 15 min, 75% = 11.25,
+    // etc. Sum across all 7 days.
+    final hourly = List<int>.filled(24, 0);
+    for (final d in days) {
+      for (var q = 0; q < d.quarters.length; q++) {
+        final p = d.quarters[q].percent;
+        if (p == null) continue;
+        final hour = q ~/ 4;
+        hourly[hour] += (p * 15 / 100).round();
+      }
+    }
+
+    // Unlogged focus quarters: quarters that fell in a scheduled block but
+    // were never stamped. Pull subjects to find scheduled windows.
+    final allSubjects = await _subjects.listAll();
+    final blocksByDow = <int, List<({int startQ, int endQ})>>{};
+    for (final s in allSubjects) {
+      for (final b in s.blocks) {
+        final startQ = b.startMinute ~/ 15;
+        final endQ = b.endMinute ~/ 15;
+        (blocksByDow[b.dayOfWeek] ??= []).add((startQ: startQ, endQ: endQ));
+      }
+    }
+    var unlogged = 0;
+    for (final d in days) {
+      final ranges = blocksByDow[d.date.weekday] ?? const [];
+      for (final r in ranges) {
+        for (var q = r.startQ; q < r.endQ && q < 96; q++) {
+          if (d.quarters[q] == Utilization.none) unlogged++;
+        }
+      }
+    }
+
+    // Per-habit hit / evaluated rows for the period (last 7 days).
+    final habitRows = <HabitWeeklyRow>[];
+    for (final h in habits) {
+      var hit = 0;
+      var seen = 0;
+      // last90 is indexed 0..89 oldest..newest. Take the last 7.
+      for (var i = h.last90.length - 7; i < h.last90.length; i++) {
+        final v = h.last90[i];
+        if (v == Utilization.none || v == Utilization.notFocus) continue;
+        seen++;
+        if (v == Utilization.full || v == Utilization.good) hit++;
+      }
+      habitRows.add(HabitWeeklyRow(
+        id: h.id,
+        name: h.name,
+        glyph: h.glyph,
+        hitDays: hit,
+        evaluatedDays: seen,
+        currentStreak: h.currentStreak,
+      ));
+    }
+
     return WeeklyStats(
       focusMinutesByDay: mins,
       days: days,
       totalFocusMinutes: total,
       avgPerDay: total ~/ days.length,
       avgHabitCompletion: avgCompletion,
+      bestDayIndex: bestIdx,
+      worstDayIndex: worstIdx,
+      goalHitDays: goalHit,
+      evaluatedTargetDays: evaluated,
+      avgUtilizationPct: avgUtil,
+      hourlyMinutes: hourly,
+      unloggedFocusQuarters: unlogged,
+      habitRows: habitRows,
     );
   }
 }

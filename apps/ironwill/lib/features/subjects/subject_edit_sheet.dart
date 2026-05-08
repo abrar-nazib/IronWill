@@ -197,11 +197,22 @@ class _SubjectEditSheetState extends State<_SubjectEditSheet> {
   }
 
   Future<void> _pickExpiresAt() async {
-    final picked = await showDatePicker(
+    // Custom calendar modal instead of the system date picker so each
+    // cell can carry a "blocks scheduled on this weekday" count derived
+    // from the current draft. Helps the user see coverage at a glance
+    // before committing to an expiry date.
+    final blocksByDow = <int, int>{};
+    for (final b in _blocks) {
+      blocksByDow[b.dayOfWeek] = (blocksByDow[b.dayOfWeek] ?? 0) + 1;
+    }
+    final picked = await showModalBottomSheet<DateTime>(
       context: context,
-      initialDate: _expiresAt,
-      firstDate: DateTime.now(),
-      lastDate: DateTime.now().add(const Duration(days: 365 * 5)),
+      isScrollControlled: true,
+      backgroundColor: context.tokens.surface,
+      builder: (_) => _ExpiryCalendarSheet(
+        initial: _expiresAt,
+        blocksByDow: blocksByDow,
+      ),
     );
     if (picked != null) setState(() => _expiresAt = picked);
   }
@@ -878,6 +889,218 @@ class _TimeBox extends StatelessWidget {
 
 String _fmt(TimeOfDay t) =>
     '${t.hour.toString().padLeft(2, '0')}:${t.minute.toString().padLeft(2, '0')}';
+
+/// Custom expiry-date picker. Shows the next 8 weeks (Mon..Sun rows). Each
+/// future date is tappable; each cell carries an "N" badge if the draft
+/// has N blocks scheduled on that weekday so users can see the schedule's
+/// real coverage before committing.
+class _ExpiryCalendarSheet extends StatefulWidget {
+  final DateTime initial;
+  final Map<int, int> blocksByDow;
+  const _ExpiryCalendarSheet({
+    required this.initial,
+    required this.blocksByDow,
+  });
+
+  @override
+  State<_ExpiryCalendarSheet> createState() => _ExpiryCalendarSheetState();
+}
+
+class _ExpiryCalendarSheetState extends State<_ExpiryCalendarSheet> {
+  late DateTime _selected;
+  static const _weeksAhead = 8;
+
+  @override
+  void initState() {
+    super.initState();
+    _selected = widget.initial;
+  }
+
+  DateTime _startMonday() {
+    final today = DateTime.now();
+    final t = DateTime(today.year, today.month, today.day);
+    return t.subtract(Duration(days: t.weekday - 1));
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final t = context.tokens;
+    final today = DateTime.now();
+    final todayDate = DateTime(today.year, today.month, today.day);
+    final start = _startMonday();
+    final totalBlocks = widget.blocksByDow.values.fold<int>(0, (a, b) => a + b);
+    return SafeArea(
+      top: false,
+      child: Padding(
+        padding: const EdgeInsets.fromLTRB(Sp.md, Sp.m, Sp.md, Sp.lg),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Center(
+              child: Container(
+                width: 36,
+                height: 4,
+                decoration: BoxDecoration(
+                  color: t.divider,
+                  borderRadius: BorderRadius.circular(R.pill),
+                ),
+              ),
+            ),
+            const SizedBox(height: Sp.md),
+            Row(
+              children: [
+                Expanded(
+                  child: Text('Pick expiry',
+                      style: AppText.headline.copyWith(color: t.ink)),
+                ),
+                IconButton(
+                  icon: const Icon(LucideIcons.x),
+                  onPressed: () => Navigator.of(context).pop(),
+                ),
+              ],
+            ),
+            const SizedBox(height: Sp.s),
+            Text(
+              totalBlocks == 0
+                  ? 'No blocks yet. Add some after picking a date.'
+                  : '$totalBlocks block${totalBlocks == 1 ? '' : 's'} per week. Numbers below show the block count for that weekday.',
+              style: AppText.label.copyWith(color: t.inkMuted),
+            ),
+            const SizedBox(height: Sp.md),
+            // Weekday header row.
+            Row(
+              children: [
+                for (final w in const ['M', 'T', 'W', 'T', 'F', 'S', 'S'])
+                  Expanded(
+                    child: Center(
+                      child: Text(
+                        w,
+                        style: AppText.label
+                            .copyWith(color: t.inkMuted, fontSize: 11),
+                      ),
+                    ),
+                  ),
+              ],
+            ),
+            const SizedBox(height: Sp.xs),
+            for (int week = 0; week < _weeksAhead; week++)
+              Padding(
+                padding: const EdgeInsets.only(bottom: 4),
+                child: Row(
+                  children: [
+                    for (int dow = 1; dow <= 7; dow++) ...[
+                      Expanded(
+                        child: _CalendarCell(
+                          date: start.add(Duration(days: week * 7 + dow - 1)),
+                          today: todayDate,
+                          selected: _selected,
+                          blockCount: widget.blocksByDow[dow] ?? 0,
+                          onTap: (d) => setState(() => _selected = d),
+                        ),
+                      ),
+                    ],
+                  ],
+                ),
+              ),
+            const SizedBox(height: Sp.md),
+            SizedBox(
+              width: double.infinity,
+              child: ElevatedButton(
+                onPressed: _selected.isBefore(todayDate)
+                    ? null
+                    : () => Navigator.of(context).pop(_selected),
+                child: const Text('Set expiry'),
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class _CalendarCell extends StatelessWidget {
+  final DateTime date;
+  final DateTime today;
+  final DateTime selected;
+  final int blockCount;
+  final ValueChanged<DateTime> onTap;
+  const _CalendarCell({
+    required this.date,
+    required this.today,
+    required this.selected,
+    required this.blockCount,
+    required this.onTap,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final t = context.tokens;
+    final isPast = date.isBefore(today);
+    final isToday = date.year == today.year &&
+        date.month == today.month &&
+        date.day == today.day;
+    final isSelected = date.year == selected.year &&
+        date.month == selected.month &&
+        date.day == selected.day;
+    final fg = isPast
+        ? t.inkMuted.withValues(alpha: 0.4)
+        : (isSelected ? t.bg : t.ink);
+    final bg = isSelected
+        ? t.ink
+        : (isToday ? t.surfaceAlt : Colors.transparent);
+    return InkWell(
+      onTap: isPast ? null : () => onTap(date),
+      borderRadius: BorderRadius.circular(R.s),
+      child: AspectRatio(
+        aspectRatio: 1,
+        child: Container(
+          margin: const EdgeInsets.all(2),
+          decoration: BoxDecoration(
+            color: bg,
+            borderRadius: BorderRadius.circular(R.s),
+            border: Border.all(
+              color: isSelected ? t.ink : t.divider,
+              width: isSelected ? 1.4 : 1,
+            ),
+          ),
+          child: Stack(
+            children: [
+              Center(
+                child: Text(
+                  date.day.toString(),
+                  style: AppText.bodyStrong.copyWith(color: fg, fontSize: 12),
+                ),
+              ),
+              if (blockCount > 0 && !isPast)
+                Positioned(
+                  top: 2,
+                  right: 2,
+                  child: Container(
+                    padding: const EdgeInsets.symmetric(
+                        horizontal: 4, vertical: 1),
+                    decoration: BoxDecoration(
+                      color: isSelected ? t.bg : t.accent,
+                      borderRadius: BorderRadius.circular(R.xs),
+                    ),
+                    child: Text(
+                      blockCount.toString(),
+                      style: AppText.label.copyWith(
+                        color: isSelected ? t.ink : t.accentInk,
+                        fontWeight: FontWeight.w800,
+                        fontSize: 9,
+                      ),
+                    ),
+                  ),
+                ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
 
 class _ModeChip extends StatelessWidget {
   final String label;

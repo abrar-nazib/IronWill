@@ -57,7 +57,7 @@ class AppServices {
     final subjects = SqliteSubjectsRepository(ldb);
     final profile = SqliteProfileRepository(ldb);
     final settings = SqliteSettingsRepository(ldb);
-    final stats = SqliteStatsRepository(habits, time, profile);
+    final stats = SqliteStatsRepository(habits, time, profile, subjects);
     final notifications = NotificationsService();
     final services = AppServices(
       habits: habits,

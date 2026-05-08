@@ -554,6 +554,28 @@ class DashboardStats {
   });
 }
 
+/// Per-habit row used inside [WeeklyStats] so the user can see which habit is
+/// pulling the average up or down without leaving the Stats screen.
+class HabitWeeklyRow {
+  final String id;
+  final String name;
+  final IconData glyph;
+  final int hitDays;
+  final int evaluatedDays;
+  final int currentStreak;
+  const HabitWeeklyRow({
+    required this.id,
+    required this.name,
+    required this.glyph,
+    required this.hitDays,
+    required this.evaluatedDays,
+    required this.currentStreak,
+  });
+
+  int get completionPct =>
+      evaluatedDays == 0 ? 0 : ((hitDays / evaluatedDays) * 100).round();
+}
+
 class WeeklyStats {
   final List<int> focusMinutesByDay;
   final List<DayBlocks> days;
@@ -561,11 +583,52 @@ class WeeklyStats {
   final int avgPerDay;
   final int avgHabitCompletion;
 
+  /// Index of the day in [days] with the most focused minutes. -1 when the
+  /// whole week has zero minutes.
+  final int bestDayIndex;
+
+  /// Same shape as [bestDayIndex] but for the lowest non-zero day. -1 when
+  /// the entire week is zeros.
+  final int worstDayIndex;
+
+  /// Number of days in the period that hit (or beat) the per-weekday focus
+  /// target. Days with a 0-target ("rest day") are excluded from the
+  /// denominator so the metric isn't gamed by setting Sunday to zero.
+  final int goalHitDays;
+
+  /// Denominator for [goalHitDays] - days in range with a non-zero target.
+  final int evaluatedTargetDays;
+
+  /// Average utilization of LOGGED blocks (0..100). A pure "wasted" log
+  /// pulls this down, a "full" log pulls it up. Skips unlogged quarters.
+  final int avgUtilizationPct;
+
+  /// 24 ints. `[h]` is the total minutes focused at hour-of-day h across
+  /// the entire period. Drives the "when do you actually focus" heatmap.
+  final List<int> hourlyMinutes;
+
+  /// Total focused-but-unlogged quarters in the period - the quarters that
+  /// fell inside a scheduled subject block but never got a utilization
+  /// stamp. Surfaced so the user sees where their data is missing.
+  final int unloggedFocusQuarters;
+
+  /// One row per active habit with hit/evaluated counts so the UI can
+  /// sort, color, and rank.
+  final List<HabitWeeklyRow> habitRows;
+
   const WeeklyStats({
     required this.focusMinutesByDay,
     required this.days,
     required this.totalFocusMinutes,
     required this.avgPerDay,
     required this.avgHabitCompletion,
+    required this.bestDayIndex,
+    required this.worstDayIndex,
+    required this.goalHitDays,
+    required this.evaluatedTargetDays,
+    required this.avgUtilizationPct,
+    required this.hourlyMinutes,
+    required this.unloggedFocusQuarters,
+    required this.habitRows,
   });
 }

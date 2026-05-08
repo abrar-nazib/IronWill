@@ -385,12 +385,89 @@ class MockStatsRepository implements StatsRepository {
     final avgCompletion = activeHabits.isEmpty
         ? 0
         : (activeHabits.fold<int>(0, (a, h) => a + h.completionRate) ~/ activeHabits.length);
+
+    var bestIdx = -1;
+    var bestMin = -1;
+    var worstIdx = -1;
+    var worstMin = 1 << 30;
+    for (var i = 0; i < mins.length; i++) {
+      final m = mins[i];
+      if (m > bestMin) {
+        bestMin = m;
+        bestIdx = i;
+      }
+      if (m > 0 && m < worstMin) {
+        worstMin = m;
+        worstIdx = i;
+      }
+    }
+    if (bestMin == 0) bestIdx = -1;
+
+    var goalHit = 0;
+    var evaluated = 0;
+    for (var i = 0; i < days.length; i++) {
+      final target = _db.profile.targetForWeekday(days[i].date.weekday);
+      if (target <= 0) continue;
+      evaluated++;
+      if (mins[i] >= target) goalHit++;
+    }
+
+    var pctSum = 0;
+    var pctCount = 0;
+    for (final d in days) {
+      for (final q in d.quarters) {
+        final p = q.percent;
+        if (p != null) {
+          pctSum += p;
+          pctCount++;
+        }
+      }
+    }
+    final avgUtil = pctCount == 0 ? 0 : (pctSum / pctCount).round();
+
+    final hourly = List<int>.filled(24, 0);
+    for (final d in days) {
+      for (var q = 0; q < d.quarters.length; q++) {
+        final p = d.quarters[q].percent;
+        if (p == null) continue;
+        hourly[q ~/ 4] += (p * 15 / 100).round();
+      }
+    }
+
+    final habitRows = <HabitWeeklyRow>[];
+    for (final h in activeHabits) {
+      var hit = 0;
+      var seen = 0;
+      for (var i = h.last90.length - 7; i < h.last90.length; i++) {
+        final v = h.last90[i];
+        if (v == Utilization.none || v == Utilization.notFocus) continue;
+        seen++;
+        if (v == Utilization.full || v == Utilization.good) hit++;
+      }
+      habitRows.add(HabitWeeklyRow(
+        id: h.id,
+        name: h.name,
+        glyph: h.glyph,
+        hitDays: hit,
+        evaluatedDays: seen,
+        currentStreak: h.currentStreak,
+      ));
+    }
+
     return WeeklyStats(
       focusMinutesByDay: mins,
       days: days,
       totalFocusMinutes: total,
       avgPerDay: total ~/ max(1, days.length),
       avgHabitCompletion: avgCompletion,
+      bestDayIndex: bestIdx,
+      worstDayIndex: worstIdx,
+      goalHitDays: goalHit,
+      evaluatedTargetDays: evaluated,
+      avgUtilizationPct: avgUtil,
+      hourlyMinutes: hourly,
+      unloggedFocusQuarters: 0,
+      habitRows: habitRows,
     );
   }
 }
