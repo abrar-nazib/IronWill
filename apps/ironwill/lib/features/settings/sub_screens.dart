@@ -684,7 +684,7 @@ class SubjectsScreen extends StatelessWidget {
     final svc = AppServices.of(context);
     return Scaffold(
       backgroundColor: t.bg,
-      appBar: AppBar(title: const Text('Subjects')),
+      appBar: AppBar(title: const Text('Subjects and focus sessions')),
       body: ValueListenableBuilder<List<Subject>>(
         valueListenable: svc.subjects.all,
         builder: (_, subjects, __) => ListView.separated(
@@ -716,9 +716,9 @@ class SubjectsScreen extends StatelessWidget {
                         child: Column(
                           crossAxisAlignment: CrossAxisAlignment.start,
                           children: [
-                            Text('Add a subject',
+                            Text('Add focus blocks',
                                 style: AppText.bodyStrong.copyWith(color: t.ink)),
-                            Text('Name and a weekly schedule',
+                            Text('Group blocks under a subject (Math, Workout, ...)',
                                 style: AppText.label.copyWith(color: t.inkMuted)),
                           ],
                         ),

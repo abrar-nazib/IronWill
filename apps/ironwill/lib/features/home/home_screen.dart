@@ -234,9 +234,15 @@ Future<void> _logCurrentQuarter(BuildContext context) async {
 
 /// The "you can log here" tray. Most prominent action on the home screen so
 /// the user always knows where to add an entry.
+///
+/// Layout intent: keep logging actions and creation actions visually
+/// separated so users do not confuse "Log a habit" (mark today's status) with
+/// "Add habit" (create a new habit definition). Logging actions go in their
+/// own row pair on top; creation actions sit in a single row underneath.
 class _LogTrayCard extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
+    final t = context.tokens;
     final svc = AppServices.of(context);
     return AppCard(
       padding: const EdgeInsets.all(Sp.md),
@@ -248,12 +254,10 @@ class _LogTrayCard extends StatelessWidget {
             valueListenable: svc.settings.settings,
             builder: (_, settings, __) {
               final size = settings.blockSizeMinutes;
-              final title = size == 60
-                  ? 'Log this hour'
-                  : (size == 30 ? 'Log this 30 min' : 'Log this quarter');
+              final title = 'Log a focus block';
               final subtitle = size == 60
-                  ? 'Last hour of focus'
-                  : 'Last $size minutes of focus';
+                  ? 'Mark how the last hour went'
+                  : 'Mark how the last $size minutes went';
               return Row(
                 children: [
                   Expanded(
@@ -269,7 +273,7 @@ class _LogTrayCard extends StatelessWidget {
                     child: _BigAction(
                       icon: LucideIcons.checkCheck,
                       title: 'Log a habit',
-                      subtitle: 'Mark today\'s status',
+                      subtitle: "Mark today's status",
                       onTap: () => context.go('/habits'),
                     ),
                   ),
@@ -277,22 +281,34 @@ class _LogTrayCard extends StatelessWidget {
               );
             },
           ),
+          const SizedBox(height: Sp.m),
+          Row(
+            children: [
+              Expanded(
+                child: Text('QUICK ADD',
+                    style: Theme.of(context)
+                        .textTheme
+                        .labelSmall
+                        ?.copyWith(color: t.inkMuted)),
+              ),
+            ],
+          ),
           const SizedBox(height: Sp.s),
           Row(
             children: [
               Expanded(
                 child: OutlinedButton.icon(
-                  icon: const Icon(LucideIcons.plus),
-                  label: const Text('Add habit'),
-                  onPressed: () => showHabitEditSheet(context),
+                  icon: const Icon(LucideIcons.calendarPlus),
+                  label: const Text('Add focus blocks'),
+                  onPressed: () => context.push('/settings/subjects'),
                 ),
               ),
               const SizedBox(width: Sp.s),
               Expanded(
                 child: OutlinedButton.icon(
-                  icon: const Icon(LucideIcons.calendarPlus),
-                  label: const Text('Add subject'),
-                  onPressed: () => context.push('/settings/subjects'),
+                  icon: const Icon(LucideIcons.plus),
+                  label: const Text('Add habit'),
+                  onPressed: () => showHabitEditSheet(context),
                 ),
               ),
             ],
@@ -384,7 +400,7 @@ class _UpNextCard extends StatelessWidget {
                       const SizedBox(height: 2),
                       Text('No subjects scheduled', style: AppText.title.copyWith(color: t.ink)),
                       const SizedBox(height: 2),
-                      Text('Add a subject in Settings to fill your week.',
+                      Text('Add focus blocks under a subject to fill your week.',
                           style: AppText.label.copyWith(color: t.inkMuted)),
                     ],
                   ),
@@ -580,27 +596,42 @@ class _TodaysGridCard extends StatelessWidget {
     final svc = AppServices.of(context);
     return ValueListenableBuilder<DayBlocks>(
       valueListenable: svc.time.today,
-      builder: (_, day, __) => AppCard(
-        padding: const EdgeInsets.all(Sp.md),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            SectionHeader(
-              "Today's grid",
-              trailing: TextButton(
-                onPressed: () => context.go('/time'),
-                style: TextButton.styleFrom(minimumSize: const Size(0, 28)),
-                child: const Text('Open'),
-              ),
+      builder: (_, day, __) => ValueListenableBuilder<AppSettings>(
+        valueListenable: svc.settings.settings,
+        builder: (_, settings, __) {
+          final size = settings.blockSizeMinutes;
+          final hint = size == 60
+              ? 'Tap a block on the Time tab to log how that hour went.'
+              : (size == 30
+                  ? 'Tap a block on the Time tab to log how those 30 minutes went.'
+                  : 'Tap a block on the Time tab to log how that 15 minutes went.');
+          return AppCard(
+            padding: const EdgeInsets.all(Sp.md),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                SectionHeader(
+                  "Today's grid",
+                  trailing: TextButton(
+                    onPressed: () => context.go('/time'),
+                    style: TextButton.styleFrom(minimumSize: const Size(0, 28)),
+                    child: const Text('Open'),
+                  ),
+                ),
+                Text(
+                  hint,
+                  style: AppText.body.copyWith(color: t.inkMuted),
+                ),
+                const SizedBox(height: Sp.m),
+                QuarterGrid(
+                  quarters: day.quarters,
+                  blockSizeMinutes: size,
+                  compact: true,
+                ),
+              ],
             ),
-            Text(
-              'Tap a quarter on the Time tab to log how that 15 minutes went.',
-              style: AppText.body.copyWith(color: t.inkMuted),
-            ),
-            const SizedBox(height: Sp.m),
-            QuarterGrid(quarters: day.quarters, compact: true),
-          ],
-        ),
+          );
+        },
       ),
     );
   }

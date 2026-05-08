@@ -6,24 +6,78 @@ import '../../services/app_services.dart';
 import '../../theme/tokens.dart';
 import '../../theme/typography.dart';
 
-const _glyphChoices = <IconData>[
-  LucideIcons.shieldOff,
-  LucideIcons.snowflake,
-  LucideIcons.bookOpen,
-  LucideIcons.dumbbell,
-  LucideIcons.moon,
-  LucideIcons.sunrise,
-  LucideIcons.brain,
-  LucideIcons.coffee,
-  LucideIcons.droplet,
-  LucideIcons.heart,
-  LucideIcons.footprints,
-  LucideIcons.notebookPen,
+/// The 8 most-common glyphs surfaced inline. Anything more lives behind the
+/// "More" tile and the categorised picker.
+const _quickGlyphs = <IconData>[
   LucideIcons.target,
-  LucideIcons.clock,
-  LucideIcons.bike,
-  LucideIcons.leaf,
+  LucideIcons.dumbbell,
+  LucideIcons.bookOpen,
+  LucideIcons.brain,
+  LucideIcons.droplet,
+  LucideIcons.bed,
+  LucideIcons.sunrise,
+  LucideIcons.heart,
 ];
+
+/// Categorised glyph library for the "More" picker. Keep groups themed so
+/// users can scan to a section instead of skimming a flat 100-icon list.
+const Map<String, List<IconData>> _glyphCategories = {
+  'Body': [
+    LucideIcons.dumbbell,
+    LucideIcons.bike,
+    LucideIcons.footprints,
+    LucideIcons.activity,
+    LucideIcons.heart,
+    LucideIcons.heartPulse,
+    LucideIcons.flame,
+    LucideIcons.medal,
+    LucideIcons.timer,
+  ],
+  'Mind': [
+    LucideIcons.brain,
+    LucideIcons.bookOpen,
+    LucideIcons.notebookPen,
+    LucideIcons.feather,
+    LucideIcons.lightbulb,
+    LucideIcons.graduationCap,
+    LucideIcons.target,
+    LucideIcons.compass,
+    LucideIcons.glasses,
+  ],
+  'Wellness': [
+    LucideIcons.bed,
+    LucideIcons.moon,
+    LucideIcons.sunrise,
+    LucideIcons.sun,
+    LucideIcons.droplet,
+    LucideIcons.leaf,
+    LucideIcons.apple,
+    LucideIcons.coffee,
+    LucideIcons.bath,
+  ],
+  'Discipline': [
+    LucideIcons.shield,
+    LucideIcons.shieldOff,
+    LucideIcons.snowflake,
+    LucideIcons.lock,
+    LucideIcons.handCoins,
+    LucideIcons.checkCheck,
+    LucideIcons.flag,
+    LucideIcons.alarmClock,
+    LucideIcons.clock,
+  ],
+  'Craft': [
+    LucideIcons.code,
+    LucideIcons.terminal,
+    LucideIcons.hammer,
+    LucideIcons.palette,
+    LucideIcons.music,
+    LucideIcons.camera,
+    LucideIcons.pencil,
+    LucideIcons.briefcase,
+    LucideIcons.guitar,
+  ],
+};
 
 Future<void> showHabitEditSheet(BuildContext context, {Habit? existing}) {
   return showModalBottomSheet<void>(
@@ -52,6 +106,7 @@ class _HabitEditSheetState extends State<_HabitEditSheet> {
   late bool _reminderOn;
   late List<HabitField> _fields;
   bool _saving = false;
+  bool _showAdvanced = false;
 
   @override
   void initState() {
@@ -60,12 +115,18 @@ class _HabitEditSheetState extends State<_HabitEditSheet> {
     _name = TextEditingController(text: h?.name ?? '');
     _description = TextEditingController(text: h?.description ?? '');
     _cadence = h?.cadence ?? HabitCadence.daily;
-    // New habits default to all 7 days. Editing keeps whatever the user had.
+    // Custom days: editing keeps whatever the user had; new habits seed all 7
+    // so flipping to "Custom days" doesn't start from an empty selection.
     _customDays = [...(h?.customDays ?? const [1, 2, 3, 4, 5, 6, 7])];
     _glyph = h?.glyph ?? LucideIcons.target;
-    _reminder = h?.reminder ?? const TimeOfDay(hour: 7, minute: 0);
+    // Default 6:00 PM. A reminder typically lands when the user is winding
+    // down their day, not at sunrise.
+    _reminder = h?.reminder ?? const TimeOfDay(hour: 18, minute: 0);
     _reminderOn = h?.reminderOn ?? true;
     _fields = h == null ? [] : parseHabitFields(h.metadata);
+    // Auto-expand the "Advanced" section if the habit already has fields,
+    // so editors can see them at a glance.
+    _showAdvanced = _fields.isNotEmpty;
   }
 
   @override
@@ -108,15 +169,15 @@ class _HabitEditSheetState extends State<_HabitEditSheet> {
   }
 
   Future<void> _addField() async {
-    final messenger = ScaffoldMessenger.of(context);
     final created = await showDialog<HabitField>(
       context: context,
       builder: (_) => const _FieldEditorDialog(),
     );
     if (!mounted || created == null) return;
-    if (_fields.any((f) =>
-        f.key.toLowerCase() == created.key.toLowerCase())) {
-      messenger.showSnackBar(SnackBar(
+    final clash = _fields.any(
+        (f) => f.key.toLowerCase() == created.key.toLowerCase());
+    if (clash) {
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(
         content: Text('"${created.key}" already exists.'),
         duration: const Duration(seconds: 3),
       ));
@@ -131,6 +192,16 @@ class _HabitEditSheetState extends State<_HabitEditSheet> {
       builder: (_) => _FieldEditorDialog(initial: _fields[index]),
     );
     if (updated != null) setState(() => _fields[index] = updated);
+  }
+
+  Future<void> _openGlyphLibrary() async {
+    final picked = await showModalBottomSheet<IconData>(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: context.tokens.surface,
+      builder: (_) => _GlyphLibrarySheet(current: _glyph),
+    );
+    if (picked != null) setState(() => _glyph = picked);
   }
 
   @override
@@ -199,89 +270,20 @@ class _HabitEditSheetState extends State<_HabitEditSheet> {
               ),
               const SizedBox(height: Sp.lg),
 
-              Row(
-                children: [
-                  Text('TRACKING FIELDS',
-                      style: Theme.of(context)
-                          .textTheme
-                          .labelSmall
-                          ?.copyWith(color: t.inkMuted)),
-                  const Spacer(),
-                  TextButton.icon(
-                    onPressed: _addField,
-                    icon: const Icon(LucideIcons.plus, size: 16),
-                    label: const Text('Add field'),
-                  ),
-                ],
-              ),
-              const SizedBox(height: Sp.s),
-              if (_fields.isEmpty)
-                Container(
-                  width: double.infinity,
-                  padding: const EdgeInsets.all(Sp.md),
-                  decoration: BoxDecoration(
-                    color: t.surfaceAlt,
-                    borderRadius: BorderRadius.circular(R.s),
-                    border: Border.all(color: t.divider),
-                  ),
-                  child: Text(
-                    'Optional. Add fields like "PU" (pushup reps as a list of numbers) so you can record reps per day and compare over time.',
-                    style: AppText.label.copyWith(color: t.inkMuted),
-                  ),
-                )
-              else
-                Column(
-                  children: [
-                    for (var i = 0; i < _fields.length; i++)
-                      Padding(
-                        padding: const EdgeInsets.only(bottom: Sp.s),
-                        child: _FieldRow(
-                          field: _fields[i],
-                          onTap: () => _editField(i),
-                          onDelete: () => setState(() => _fields.removeAt(i)),
-                        ),
-                      ),
-                  ],
-                ),
-              const SizedBox(height: Sp.lg),
-
               Text('GLYPH', style: Theme.of(context).textTheme.labelSmall?.copyWith(color: t.inkMuted)),
               const SizedBox(height: Sp.s),
-              Wrap(
-                spacing: Sp.s,
-                runSpacing: Sp.s,
-                children: [
-                  for (final g in _glyphChoices)
-                    InkWell(
-                      borderRadius: BorderRadius.circular(R.s),
-                      onTap: () => setState(() => _glyph = g),
-                      child: Container(
-                        width: 44,
-                        height: 44,
-                        decoration: BoxDecoration(
-                          color: g == _glyph ? t.ink : t.surfaceAlt,
-                          borderRadius: BorderRadius.circular(R.s),
-                          border: Border.all(color: t.divider),
-                        ),
-                        alignment: Alignment.center,
-                        child: Icon(g, color: g == _glyph ? t.bg : t.ink, size: IconSize.m),
-                      ),
-                    ),
-                ],
+              _GlyphRow(
+                current: _glyph,
+                onPick: (g) => setState(() => _glyph = g),
+                onMore: _openGlyphLibrary,
               ),
               const SizedBox(height: Sp.lg),
 
               Text('CADENCE', style: Theme.of(context).textTheme.labelSmall?.copyWith(color: t.inkMuted)),
               const SizedBox(height: Sp.s),
-              Column(
-                children: [
-                  for (final c in HabitCadence.values)
-                    _CadenceRow(
-                      cadence: c,
-                      selected: _cadence == c,
-                      onTap: () => setState(() => _cadence = c),
-                    ),
-                ],
+              _CadenceGrid(
+                value: _cadence,
+                onChange: (c) => setState(() => _cadence = c),
               ),
               if (_cadence == HabitCadence.custom) ...[
                 const SizedBox(height: Sp.s),
@@ -331,6 +333,22 @@ class _HabitEditSheetState extends State<_HabitEditSheet> {
                   ),
                 ],
               ),
+              const SizedBox(height: Sp.lg),
+
+              _AdvancedToggle(
+                expanded: _showAdvanced,
+                onTap: () => setState(() => _showAdvanced = !_showAdvanced),
+                fieldCount: _fields.length,
+              ),
+              if (_showAdvanced) ...[
+                const SizedBox(height: Sp.s),
+                _TrackingFieldsSection(
+                  fields: _fields,
+                  onAdd: _addField,
+                  onEdit: _editField,
+                  onDelete: (i) => setState(() => _fields.removeAt(i)),
+                ),
+              ],
               const SizedBox(height: Sp.x3l),
 
               SizedBox(
@@ -361,53 +379,387 @@ class _HabitEditSheetState extends State<_HabitEditSheet> {
   }
 }
 
-class _CadenceRow extends StatelessWidget {
-  final HabitCadence cadence;
-  final bool selected;
-  final VoidCallback onTap;
-  const _CadenceRow({required this.cadence, required this.selected, required this.onTap});
+/// Inline glyph strip showing the 8 most common picks plus a "More" tile that
+/// opens the categorised library. If the user's current glyph is outside the
+/// quick list, it gets injected at the front so it is always visible.
+class _GlyphRow extends StatelessWidget {
+  final IconData current;
+  final ValueChanged<IconData> onPick;
+  final VoidCallback onMore;
+  const _GlyphRow({
+    required this.current,
+    required this.onPick,
+    required this.onMore,
+  });
 
   @override
   Widget build(BuildContext context) {
     final t = context.tokens;
-    return Padding(
-      padding: const EdgeInsets.only(bottom: Sp.s),
-      child: InkWell(
-        borderRadius: BorderRadius.circular(R.s),
-        onTap: onTap,
-        child: Container(
-          padding: const EdgeInsets.symmetric(horizontal: Sp.md, vertical: Sp.m),
-          decoration: BoxDecoration(
-            color: selected ? t.surfaceAlt : Colors.transparent,
-            borderRadius: BorderRadius.circular(R.s),
-            border: Border.all(color: selected ? t.ink : t.divider),
+    final inline = <IconData>[..._quickGlyphs];
+    if (!inline.contains(current)) {
+      inline.insert(0, current);
+      if (inline.length > _quickGlyphs.length) inline.removeLast();
+    }
+    return Wrap(
+      spacing: Sp.s,
+      runSpacing: Sp.s,
+      children: [
+        for (final g in inline)
+          _GlyphTile(
+            glyph: g,
+            selected: g == current,
+            onTap: () => onPick(g),
           ),
-          child: Row(
-            children: [
-              Container(
-                width: 18,
-                height: 18,
+        _GlyphMoreTile(onTap: onMore, accent: t.ink),
+      ],
+    );
+  }
+}
+
+class _GlyphTile extends StatelessWidget {
+  final IconData glyph;
+  final bool selected;
+  final VoidCallback onTap;
+  const _GlyphTile({
+    required this.glyph,
+    required this.selected,
+    required this.onTap,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final t = context.tokens;
+    return InkWell(
+      borderRadius: BorderRadius.circular(R.s),
+      onTap: onTap,
+      child: Container(
+        width: 44,
+        height: 44,
+        decoration: BoxDecoration(
+          color: selected ? t.ink : t.surfaceAlt,
+          borderRadius: BorderRadius.circular(R.s),
+          border: Border.all(color: t.divider),
+        ),
+        alignment: Alignment.center,
+        child: Icon(glyph, color: selected ? t.bg : t.ink, size: IconSize.m),
+      ),
+    );
+  }
+}
+
+class _GlyphMoreTile extends StatelessWidget {
+  final VoidCallback onTap;
+  final Color accent;
+  const _GlyphMoreTile({required this.onTap, required this.accent});
+
+  @override
+  Widget build(BuildContext context) {
+    final t = context.tokens;
+    return InkWell(
+      borderRadius: BorderRadius.circular(R.s),
+      onTap: onTap,
+      child: Container(
+        width: 44,
+        height: 44,
+        decoration: BoxDecoration(
+          color: t.surfaceAlt,
+          borderRadius: BorderRadius.circular(R.s),
+          border: Border.all(color: accent, width: 1.4),
+        ),
+        alignment: Alignment.center,
+        child: Icon(LucideIcons.ellipsis, color: accent, size: IconSize.m),
+      ),
+    );
+  }
+}
+
+/// Floating modal sheet that lists every glyph grouped by category. Returns
+/// the picked glyph, or null on dismiss.
+class _GlyphLibrarySheet extends StatelessWidget {
+  final IconData current;
+  const _GlyphLibrarySheet({required this.current});
+
+  @override
+  Widget build(BuildContext context) {
+    final t = context.tokens;
+    return SafeArea(
+      top: false,
+      child: Padding(
+        padding: const EdgeInsets.fromLTRB(Sp.md, Sp.m, Sp.md, Sp.lg),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Center(
+              child: Container(
+                width: 36,
+                height: 4,
                 decoration: BoxDecoration(
-                  shape: BoxShape.circle,
-                  border: Border.all(color: selected ? t.ink : t.divider, width: 2),
-                  color: selected ? t.ink : Colors.transparent,
+                  color: t.divider,
+                  borderRadius: BorderRadius.circular(R.pill),
                 ),
-                child: selected
-                    ? Center(
-                        child: Container(
-                          width: 8,
-                          height: 8,
-                          decoration: BoxDecoration(color: t.bg, shape: BoxShape.circle),
-                        ),
-                      )
-                    : null,
               ),
-              const SizedBox(width: Sp.m),
-              Text(cadence.label, style: AppText.bodyStrong.copyWith(color: t.ink)),
-            ],
-          ),
+            ),
+            const SizedBox(height: Sp.md),
+            Row(
+              children: [
+                Expanded(
+                  child: Text('Pick a glyph',
+                      style: AppText.headline.copyWith(color: t.ink)),
+                ),
+                IconButton(
+                  icon: const Icon(LucideIcons.x),
+                  onPressed: () => Navigator.of(context).pop(),
+                ),
+              ],
+            ),
+            const SizedBox(height: Sp.s),
+            Flexible(
+              child: SingleChildScrollView(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    for (final entry in _glyphCategories.entries) ...[
+                      Padding(
+                        padding: const EdgeInsets.only(top: Sp.m, bottom: Sp.s),
+                        child: Text(
+                          entry.key.toUpperCase(),
+                          style: Theme.of(context)
+                              .textTheme
+                              .labelSmall
+                              ?.copyWith(color: t.inkMuted),
+                        ),
+                      ),
+                      Wrap(
+                        spacing: Sp.s,
+                        runSpacing: Sp.s,
+                        children: [
+                          for (final g in entry.value)
+                            _GlyphTile(
+                              glyph: g,
+                              selected: g == current,
+                              onTap: () => Navigator.of(context).pop(g),
+                            ),
+                        ],
+                      ),
+                    ],
+                  ],
+                ),
+              ),
+            ),
+          ],
         ),
       ),
+    );
+  }
+}
+
+/// 2x2 cadence grid. Replaces the vertical RadioListTile stack so the section
+/// fits in less vertical space and the four options can be scanned at a
+/// glance.
+class _CadenceGrid extends StatelessWidget {
+  final HabitCadence value;
+  final ValueChanged<HabitCadence> onChange;
+  const _CadenceGrid({required this.value, required this.onChange});
+
+  @override
+  Widget build(BuildContext context) {
+    return Column(
+      children: [
+        Row(
+          children: [
+            Expanded(child: _cell(context, HabitCadence.daily)),
+            const SizedBox(width: Sp.s),
+            Expanded(child: _cell(context, HabitCadence.weekdays)),
+          ],
+        ),
+        const SizedBox(height: Sp.s),
+        Row(
+          children: [
+            Expanded(child: _cell(context, HabitCadence.weekends)),
+            const SizedBox(width: Sp.s),
+            Expanded(child: _cell(context, HabitCadence.custom)),
+          ],
+        ),
+      ],
+    );
+  }
+
+  Widget _cell(BuildContext context, HabitCadence c) {
+    final t = context.tokens;
+    final selected = value == c;
+    return InkWell(
+      borderRadius: BorderRadius.circular(R.s),
+      onTap: () => onChange(c),
+      child: Container(
+        padding:
+            const EdgeInsets.symmetric(horizontal: Sp.md, vertical: Sp.m),
+        decoration: BoxDecoration(
+          color: selected ? t.surfaceAlt : Colors.transparent,
+          borderRadius: BorderRadius.circular(R.s),
+          border: Border.all(
+            color: selected ? t.ink : t.divider,
+            width: selected ? 1.5 : 1,
+          ),
+        ),
+        child: Row(
+          children: [
+            Container(
+              width: 16,
+              height: 16,
+              decoration: BoxDecoration(
+                shape: BoxShape.circle,
+                border: Border.all(
+                  color: selected ? t.ink : t.divider,
+                  width: 2,
+                ),
+                color: selected ? t.ink : Colors.transparent,
+              ),
+              child: selected
+                  ? Center(
+                      child: Container(
+                        width: 6,
+                        height: 6,
+                        decoration: BoxDecoration(
+                          color: t.bg,
+                          shape: BoxShape.circle,
+                        ),
+                      ),
+                    )
+                  : null,
+            ),
+            const SizedBox(width: Sp.s),
+            Expanded(
+              child: Text(
+                c.label,
+                style: AppText.bodyStrong.copyWith(color: t.ink, fontSize: 13),
+                overflow: TextOverflow.ellipsis,
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+/// Tap-to-expand row that gates the tracking-fields editor as an "Advanced"
+/// option. Most users skip it; power users (e.g. counting reps per day) can
+/// reveal it without cluttering the main editor.
+class _AdvancedToggle extends StatelessWidget {
+  final bool expanded;
+  final VoidCallback onTap;
+  final int fieldCount;
+  const _AdvancedToggle({
+    required this.expanded,
+    required this.onTap,
+    required this.fieldCount,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final t = context.tokens;
+    final summary = fieldCount == 0
+        ? 'Track per-day numbers, lists, or yes/no'
+        : '$fieldCount field${fieldCount == 1 ? '' : 's'} configured';
+    return InkWell(
+      borderRadius: BorderRadius.circular(R.s),
+      onTap: onTap,
+      child: Container(
+        padding:
+            const EdgeInsets.symmetric(horizontal: Sp.md, vertical: Sp.m),
+        decoration: BoxDecoration(
+          color: t.surfaceAlt,
+          borderRadius: BorderRadius.circular(R.s),
+          border: Border.all(color: t.divider),
+        ),
+        child: Row(
+          children: [
+            Icon(LucideIcons.slidersHorizontal, color: t.ink, size: IconSize.m),
+            const SizedBox(width: Sp.m),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text('Advanced: tracking fields',
+                      style: AppText.bodyStrong.copyWith(color: t.ink)),
+                  Text(summary,
+                      style: AppText.label.copyWith(color: t.inkMuted)),
+                ],
+              ),
+            ),
+            Icon(
+              expanded ? LucideIcons.chevronUp : LucideIcons.chevronDown,
+              color: t.inkMuted,
+              size: IconSize.m,
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class _TrackingFieldsSection extends StatelessWidget {
+  final List<HabitField> fields;
+  final Future<void> Function() onAdd;
+  final Future<void> Function(int) onEdit;
+  final void Function(int) onDelete;
+  const _TrackingFieldsSection({
+    required this.fields,
+    required this.onAdd,
+    required this.onEdit,
+    required this.onDelete,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final t = context.tokens;
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Row(
+          children: [
+            Expanded(
+              child: Text(
+                'Optional. Add fields like "PU" (pushup reps as a number) so you can record a value per day and compare over time.',
+                style: AppText.label.copyWith(color: t.inkMuted, fontSize: 12),
+              ),
+            ),
+            const SizedBox(width: Sp.s),
+            TextButton.icon(
+              onPressed: onAdd,
+              icon: const Icon(LucideIcons.plus, size: 16),
+              label: const Text('Add field'),
+            ),
+          ],
+        ),
+        const SizedBox(height: Sp.s),
+        if (fields.isEmpty)
+          Container(
+            width: double.infinity,
+            padding: const EdgeInsets.all(Sp.md),
+            decoration: BoxDecoration(
+              color: t.surfaceAlt,
+              borderRadius: BorderRadius.circular(R.s),
+              border: Border.all(color: t.divider),
+            ),
+            child: Text(
+              'No tracking fields. Tap "Add field" to define one.',
+              style: AppText.label.copyWith(color: t.inkMuted),
+            ),
+          )
+        else
+          for (var i = 0; i < fields.length; i++)
+            Padding(
+              padding: const EdgeInsets.only(bottom: Sp.s),
+              child: _FieldRow(
+                field: fields[i],
+                onTap: () => onEdit(i),
+                onDelete: () => onDelete(i),
+              ),
+            ),
+      ],
     );
   }
 }
@@ -465,7 +817,8 @@ class _FieldRow extends StatelessWidget {
 }
 
 /// Modal that creates or edits a single [HabitField]. Returns the new field
-/// on save, null on cancel.
+/// on save, null on cancel. Uses inline validation so the dialog never has to
+/// show a snackbar from inside its own context.
 class _FieldEditorDialog extends StatefulWidget {
   final HabitField? initial;
   const _FieldEditorDialog({this.initial});
@@ -477,12 +830,15 @@ class _FieldEditorDialog extends StatefulWidget {
 class _FieldEditorDialogState extends State<_FieldEditorDialog> {
   late TextEditingController _key;
   late HabitFieldType _type;
+  String? _error;
 
   @override
   void initState() {
     super.initState();
     _key = TextEditingController(text: widget.initial?.key ?? '');
-    _type = widget.initial?.type ?? HabitFieldType.intList;
+    // Default to "number" — list types are specialised; most users want a
+    // single value per day (reps, pages, minutes).
+    _type = widget.initial?.type ?? HabitFieldType.number;
   }
 
   @override
@@ -494,10 +850,7 @@ class _FieldEditorDialogState extends State<_FieldEditorDialog> {
   void _save() {
     final key = _key.text.trim();
     if (key.isEmpty) {
-      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
-        content: Text('Field key cannot be empty.'),
-        duration: Duration(seconds: 3),
-      ));
+      setState(() => _error = 'Field key cannot be empty.');
       return;
     }
     Navigator.of(context).pop(HabitField(key: key, type: _type));
@@ -510,46 +863,44 @@ class _FieldEditorDialogState extends State<_FieldEditorDialog> {
       backgroundColor: t.surface,
       title: Text(widget.initial == null ? 'New field' : 'Edit field',
           style: AppText.headline.copyWith(color: t.ink, fontSize: 22)),
-      // Scrollable so the dialog doesn't overflow when the soft keyboard
-      // pops up for the key field on smaller screens.
-      content: SizedBox(
-        width: 360,
-        child: SingleChildScrollView(
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Text('KEY (short)',
-                  style: Theme.of(context)
-                      .textTheme
-                      .labelSmall
-                      ?.copyWith(color: t.inkMuted)),
-              const SizedBox(height: Sp.s),
-              TextField(
-                controller: _key,
-                autofocus: widget.initial == null,
-                style: AppText.body.copyWith(color: t.ink, fontSize: 16),
-                decoration: const InputDecoration(hintText: 'PU'),
+      contentPadding: const EdgeInsets.fromLTRB(Sp.md, Sp.s, Sp.md, 0),
+      content: SingleChildScrollView(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text('KEY (short)',
+                style: Theme.of(context)
+                    .textTheme
+                    .labelSmall
+                    ?.copyWith(color: t.inkMuted)),
+            const SizedBox(height: Sp.s),
+            TextField(
+              controller: _key,
+              autofocus: widget.initial == null,
+              style: AppText.body.copyWith(color: t.ink, fontSize: 16),
+              decoration: InputDecoration(
+                hintText: 'PU',
+                errorText: _error,
               ),
-              const SizedBox(height: Sp.lg),
-              Text('TYPE',
-                  style: Theme.of(context)
-                      .textTheme
-                      .labelSmall
-                      ?.copyWith(color: t.inkMuted)),
-              const SizedBox(height: Sp.s),
-              for (final tp in HabitFieldType.values)
-                RadioListTile<HabitFieldType>(
-                  contentPadding: EdgeInsets.zero,
-                  value: tp,
-                  groupValue: _type,
-                  onChanged: (v) => setState(() => _type = v ?? _type),
-                  title: Text(tp.label, style: AppText.body.copyWith(color: t.ink)),
-                  subtitle: Text(tp.hint,
-                      style: AppText.label.copyWith(color: t.inkMuted)),
-                ),
-            ],
-          ),
+              onChanged: (_) {
+                if (_error != null) setState(() => _error = null);
+              },
+            ),
+            const SizedBox(height: Sp.lg),
+            Text('TYPE',
+                style: Theme.of(context)
+                    .textTheme
+                    .labelSmall
+                    ?.copyWith(color: t.inkMuted)),
+            const SizedBox(height: Sp.s),
+            for (final tp in HabitFieldType.values)
+              _TypeRow(
+                type: tp,
+                selected: _type == tp,
+                onTap: () => setState(() => _type = tp),
+              ),
+          ],
         ),
       ),
       actions: [
@@ -562,6 +913,81 @@ class _FieldEditorDialogState extends State<_FieldEditorDialog> {
           child: Text(widget.initial == null ? 'Add' : 'Save'),
         ),
       ],
+    );
+  }
+}
+
+class _TypeRow extends StatelessWidget {
+  final HabitFieldType type;
+  final bool selected;
+  final VoidCallback onTap;
+  const _TypeRow({
+    required this.type,
+    required this.selected,
+    required this.onTap,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final t = context.tokens;
+    return Padding(
+      padding: const EdgeInsets.only(bottom: Sp.s),
+      child: InkWell(
+        borderRadius: BorderRadius.circular(R.s),
+        onTap: onTap,
+        child: Container(
+          padding:
+              const EdgeInsets.symmetric(horizontal: Sp.md, vertical: Sp.s),
+          decoration: BoxDecoration(
+            color: selected ? t.surfaceAlt : Colors.transparent,
+            borderRadius: BorderRadius.circular(R.s),
+            border: Border.all(
+              color: selected ? t.ink : t.divider,
+              width: selected ? 1.5 : 1,
+            ),
+          ),
+          child: Row(
+            children: [
+              Container(
+                width: 16,
+                height: 16,
+                decoration: BoxDecoration(
+                  shape: BoxShape.circle,
+                  border: Border.all(
+                    color: selected ? t.ink : t.divider,
+                    width: 2,
+                  ),
+                  color: selected ? t.ink : Colors.transparent,
+                ),
+                child: selected
+                    ? Center(
+                        child: Container(
+                          width: 6,
+                          height: 6,
+                          decoration: BoxDecoration(
+                            color: t.bg,
+                            shape: BoxShape.circle,
+                          ),
+                        ),
+                      )
+                    : null,
+              ),
+              const SizedBox(width: Sp.m),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(type.label,
+                        style: AppText.bodyStrong.copyWith(color: t.ink)),
+                    Text(type.hint,
+                        style: AppText.label.copyWith(color: t.inkMuted)),
+                  ],
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
     );
   }
 }

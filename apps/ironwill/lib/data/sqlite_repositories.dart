@@ -218,9 +218,57 @@ class SqliteHabitsRepository implements HabitsRepository {
 
   @override
   Future<Habit> update(Habit h) async {
+    // Field-cascade: when the user removes a tracking field from the habit,
+    // strip its key from every historical habit_logs.metadata so the data
+    // doesn't linger as orphan JSON. Adding a new field is a no-op for old
+    // logs (they simply don't have the key); only delete cascades.
+    final removed = _removedFieldKeys(h);
     await _ldb.db.update('habits', _habitToRow(h), where: 'id = ?', whereArgs: [h.id]);
+    if (removed.isNotEmpty) {
+      await _stripFieldKeysFromLogs(h.id, removed);
+    }
     await _refresh();
     return _all.value.firstWhere((x) => x.id == h.id);
+  }
+
+  /// Set of field keys that existed on the previous version of [h] but are
+  /// missing from the new metadata. Empty when the previous habit isn't
+  /// known yet (first refresh) or when nothing was removed.
+  Set<String> _removedFieldKeys(Habit h) {
+    final prev = _all.value.where((x) => x.id == h.id);
+    if (prev.isEmpty) return const <String>{};
+    final oldKeys = parseHabitFields(prev.first.metadata).map((f) => f.key).toSet();
+    final newKeys = parseHabitFields(h.metadata).map((f) => f.key).toSet();
+    return oldKeys.difference(newKeys);
+  }
+
+  Future<void> _stripFieldKeysFromLogs(
+      String habitId, Set<String> keys) async {
+    if (keys.isEmpty) return;
+    final rows = await _ldb.db.query(
+      'habit_logs',
+      where: 'habit_id = ?',
+      whereArgs: [habitId],
+    );
+    final batch = _ldb.db.batch();
+    for (final r in rows) {
+      final dateIso = r['date_iso'] as String;
+      final raw = (r['metadata'] as String?) ?? '{}';
+      final decoded = _decodeMetadata(raw);
+      var changed = false;
+      for (final k in keys) {
+        if (decoded.remove(k) != null) changed = true;
+      }
+      if (changed) {
+        batch.update(
+          'habit_logs',
+          {'metadata': jsonEncode(decoded)},
+          where: 'habit_id = ? AND date_iso = ?',
+          whereArgs: [habitId, dateIso],
+        );
+      }
+    }
+    await batch.commit(noResult: true);
   }
 
   @override

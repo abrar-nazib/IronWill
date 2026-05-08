@@ -237,6 +237,11 @@ class _SubjectEditSheetState extends State<_SubjectEditSheet> {
   @override
   Widget build(BuildContext context) {
     final t = context.tokens;
+    final today = DateTime.now();
+    final daysLeft = DateTime(_expiresAt.year, _expiresAt.month, _expiresAt.day)
+        .difference(DateTime(today.year, today.month, today.day))
+        .inDays;
+    final canAddBlock = daysLeft > 0;
     return Padding(
       padding: EdgeInsets.only(bottom: MediaQuery.of(context).viewInsets.bottom),
       child: SafeArea(
@@ -301,12 +306,38 @@ class _SubjectEditSheetState extends State<_SubjectEditSheet> {
                           ?.copyWith(color: t.inkMuted)),
                   const Spacer(),
                   TextButton.icon(
-                    onPressed: _addBlock,
+                    onPressed: canAddBlock ? _addBlock : null,
                     icon: const Icon(LucideIcons.plus, size: 16),
                     label: const Text('Add block'),
                   ),
                 ],
               ),
+              if (!canAddBlock) ...[
+                const SizedBox(height: Sp.xs),
+                Container(
+                  width: double.infinity,
+                  padding: const EdgeInsets.all(Sp.s),
+                  decoration: BoxDecoration(
+                    color: t.surfaceAlt,
+                    borderRadius: BorderRadius.circular(R.s),
+                    border: Border.all(color: t.accent.withValues(alpha: 0.4)),
+                  ),
+                  child: Row(
+                    children: [
+                      Icon(LucideIcons.triangleAlert,
+                          color: t.accent, size: IconSize.s),
+                      const SizedBox(width: Sp.s),
+                      Expanded(
+                        child: Text(
+                          'Schedule has expired. Extend the date above before adding blocks.',
+                          style: AppText.label
+                              .copyWith(color: t.accent, fontSize: 12),
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ],
               const SizedBox(height: Sp.s),
               if (_blocks.isEmpty)
                 Container(
@@ -520,12 +551,15 @@ class _BlockEditorSheet extends StatefulWidget {
   State<_BlockEditorSheet> createState() => _BlockEditorSheetState();
 }
 
+enum _BlockMode { weekdays, everyday, weekends, custom }
+
 class _BlockEditorSheetState extends State<_BlockEditorSheet> {
   /// Multi-select across weekdays: picking Mon and Wed means the editor
   /// returns two blocks with the same start/end/pomodoro settings, one per
   /// chosen day. Editing an existing block starts with that single day
   /// selected.
   late Set<int> _days;
+  late _BlockMode _mode;
   late TimeOfDay _start;
   late TimeOfDay _end;
   late bool _pomodoroEnabled;
@@ -535,14 +569,54 @@ class _BlockEditorSheetState extends State<_BlockEditorSheet> {
   void initState() {
     super.initState();
     final i = widget.initial;
-    // New blocks default to "every day". Editing an existing block starts
-    // with just that day so the user doesn't accidentally turn one block
-    // into seven by saving without re-checking the picker.
-    _days = i == null ? {1, 2, 3, 4, 5, 6, 7} : {i.dayOfWeek};
+    if (i == null) {
+      // New blocks default to Weekdays. Most users want a M-F study/work
+      // schedule; if they need every day or weekends-only the chips are one
+      // tap away.
+      _mode = _BlockMode.weekdays;
+      _days = {1, 2, 3, 4, 5};
+    } else {
+      _days = {i.dayOfWeek};
+      _mode = _BlockMode.custom;
+    }
     _start = i?.start ?? const TimeOfDay(hour: 9, minute: 0);
     _end = i?.end ?? const TimeOfDay(hour: 10, minute: 0);
     _pomodoroEnabled = i?.pomodoroEnabled ?? false;
     _pomodoroPercent = i?.pomodoroPercent ?? 15;
+  }
+
+  void _setMode(_BlockMode m) {
+    setState(() {
+      _mode = m;
+      switch (m) {
+        case _BlockMode.weekdays:
+          _days = {1, 2, 3, 4, 5};
+          break;
+        case _BlockMode.everyday:
+          _days = {1, 2, 3, 4, 5, 6, 7};
+          break;
+        case _BlockMode.weekends:
+          _days = {6, 7};
+          break;
+        case _BlockMode.custom:
+          // Leave whatever was selected. If empty, seed with Monday so the
+          // user can see the picker react.
+          if (_days.isEmpty) _days = {1};
+          break;
+      }
+    });
+  }
+
+  void _toggleDay(int d) {
+    setState(() {
+      if (_days.contains(d)) {
+        _days.remove(d);
+      } else {
+        _days.add(d);
+      }
+      // Manual day toggling means the user is in custom mode now.
+      _mode = _BlockMode.custom;
+    });
   }
 
   int _toMin(TimeOfDay t) => t.hour * 60 + t.minute;
@@ -605,8 +679,48 @@ class _BlockEditorSheetState extends State<_BlockEditorSheet> {
                       .textTheme
                       .labelSmall
                       ?.copyWith(color: t.inkMuted)),
-              const SizedBox(height: 2),
-              Text('All days are on by default. Tap to deselect.',
+              const SizedBox(height: Sp.s),
+              Row(
+                children: [
+                  Expanded(
+                    child: _ModeChip(
+                      label: 'Weekdays',
+                      selected: _mode == _BlockMode.weekdays,
+                      onTap: () => _setMode(_BlockMode.weekdays),
+                    ),
+                  ),
+                  const SizedBox(width: Sp.s),
+                  Expanded(
+                    child: _ModeChip(
+                      label: 'Every day',
+                      selected: _mode == _BlockMode.everyday,
+                      onTap: () => _setMode(_BlockMode.everyday),
+                    ),
+                  ),
+                ],
+              ),
+              const SizedBox(height: Sp.s),
+              Row(
+                children: [
+                  Expanded(
+                    child: _ModeChip(
+                      label: 'Weekends',
+                      selected: _mode == _BlockMode.weekends,
+                      onTap: () => _setMode(_BlockMode.weekends),
+                    ),
+                  ),
+                  const SizedBox(width: Sp.s),
+                  Expanded(
+                    child: _ModeChip(
+                      label: 'Custom',
+                      selected: _mode == _BlockMode.custom,
+                      onTap: () => _setMode(_BlockMode.custom),
+                    ),
+                  ),
+                ],
+              ),
+              const SizedBox(height: Sp.s),
+              Text('Tap any day to fine-tune the selection.',
                   style: AppText.label.copyWith(color: t.inkMuted, fontSize: 11)),
               const SizedBox(height: Sp.s),
               Row(
@@ -614,13 +728,7 @@ class _BlockEditorSheetState extends State<_BlockEditorSheet> {
                 children: [
                   for (int d = 1; d <= 7; d++)
                     GestureDetector(
-                      onTap: () => setState(() {
-                        if (_days.contains(d)) {
-                          _days.remove(d);
-                        } else {
-                          _days.add(d);
-                        }
-                      }),
+                      onTap: () => _toggleDay(d),
                       child: Container(
                         width: 40, height: 40,
                         decoration: BoxDecoration(
@@ -770,6 +878,45 @@ class _TimeBox extends StatelessWidget {
 
 String _fmt(TimeOfDay t) =>
     '${t.hour.toString().padLeft(2, '0')}:${t.minute.toString().padLeft(2, '0')}';
+
+class _ModeChip extends StatelessWidget {
+  final String label;
+  final bool selected;
+  final VoidCallback onTap;
+  const _ModeChip({
+    required this.label,
+    required this.selected,
+    required this.onTap,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final t = context.tokens;
+    return InkWell(
+      onTap: onTap,
+      borderRadius: BorderRadius.circular(R.s),
+      child: Container(
+        padding: const EdgeInsets.symmetric(vertical: Sp.s),
+        decoration: BoxDecoration(
+          color: selected ? t.ink : t.surfaceAlt,
+          borderRadius: BorderRadius.circular(R.s),
+          border: Border.all(
+            color: selected ? t.ink : t.divider,
+            width: selected ? 1.5 : 1,
+          ),
+        ),
+        alignment: Alignment.center,
+        child: Text(
+          label,
+          style: AppText.bodyStrong.copyWith(
+            color: selected ? t.bg : t.ink,
+            fontSize: 13,
+          ),
+        ),
+      ),
+    );
+  }
+}
 
 const List<String> _weekdayLong = [
   'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday',

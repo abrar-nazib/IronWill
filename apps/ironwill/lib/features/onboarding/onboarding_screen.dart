@@ -205,6 +205,10 @@ class _FocusTargetPage extends StatefulWidget {
 class _FocusTargetPageState extends State<_FocusTargetPage> {
   late final TextEditingController _ctl;
 
+  /// Common presets so the typical user can pick without typing. Keep this
+  /// short so the row never wraps awkwardly on small phones.
+  static const List<int> _presets = [60, 120, 180, 240, 360, 480, 600, 720];
+
   @override
   void initState() {
     super.initState();
@@ -233,6 +237,14 @@ class _FocusTargetPageState extends State<_FocusTargetPage> {
     return '${h}h ${m}m';
   }
 
+  String _shortLabel(int mins) {
+    final h = mins ~/ 60;
+    final m = mins % 60;
+    if (h == 0) return '${m}m';
+    if (m == 0) return '${h}h';
+    return '${h}h${m}m';
+  }
+
   @override
   Widget build(BuildContext context) {
     final t = context.tokens;
@@ -246,18 +258,20 @@ class _FocusTargetPageState extends State<_FocusTargetPage> {
               style: AppText.headline.copyWith(color: t.ink, fontSize: 26, height: 1.2)),
           const SizedBox(height: Sp.m),
           Text(
-            "We'll use this as the daily floor for your focus streak. Type any number from 0 to 1440 (24 hours). You can break it out per weekday later in Settings.",
+            "We'll use this as the daily floor for your focus streak. Pick a preset or type any number from 0 to 1440 (24 hours). You can break it out per weekday later in Settings.",
             style: AppText.body.copyWith(color: t.inkMuted),
           ),
           const SizedBox(height: Sp.lg),
+          // Card uses surface instead of t.ink so the global input-decoration
+          // fillColor (surfaceAlt) sits naturally inside it without painting
+          // dark text on a dark fill in dark mode.
           AppCard(
-            color: t.ink,
-            stroked: false,
-            padding: const EdgeInsets.all(Sp.lg),
+            color: t.surface,
+            padding: const EdgeInsets.fromLTRB(Sp.s, Sp.lg, Sp.s, Sp.lg),
             child: Row(
               children: [
                 IconButton(
-                  icon: Icon(LucideIcons.minus, color: t.bg),
+                  icon: Icon(LucideIcons.minus, color: t.ink),
                   onPressed: () => _commit(widget.target - 15),
                   tooltip: '-15 min',
                 ),
@@ -266,13 +280,17 @@ class _FocusTargetPageState extends State<_FocusTargetPage> {
                     controller: _ctl,
                     textAlign: TextAlign.center,
                     keyboardType: TextInputType.number,
-                    style: AppText.big.copyWith(color: t.bg, fontSize: 48),
+                    style: AppText.big.copyWith(color: t.ink, fontSize: 48),
                     decoration: InputDecoration(
                       isDense: true,
+                      filled: false,
                       border: InputBorder.none,
+                      enabledBorder: InputBorder.none,
+                      focusedBorder: InputBorder.none,
+                      contentPadding: EdgeInsets.zero,
                       hintText: '240',
                       hintStyle: AppText.big.copyWith(
-                        color: t.bg.withValues(alpha: 0.3),
+                        color: t.inkMuted.withValues(alpha: 0.4),
                         fontSize: 48,
                       ),
                     ),
@@ -283,7 +301,7 @@ class _FocusTargetPageState extends State<_FocusTargetPage> {
                   ),
                 ),
                 IconButton(
-                  icon: Icon(LucideIcons.plus, color: t.bg),
+                  icon: Icon(LucideIcons.plus, color: t.ink),
                   onPressed: () => _commit(widget.target + 15),
                   tooltip: '+15 min',
                 ),
@@ -293,12 +311,67 @@ class _FocusTargetPageState extends State<_FocusTargetPage> {
           const SizedBox(height: Sp.s),
           Text('= ${_hours(widget.target)} per day',
               style: AppText.label.copyWith(color: t.inkMuted)),
-          const Spacer(),
+          const SizedBox(height: Sp.md),
+          Text('QUICK PICK',
+              style: Theme.of(context)
+                  .textTheme
+                  .labelSmall
+                  ?.copyWith(color: t.inkMuted)),
+          const SizedBox(height: Sp.s),
+          Wrap(
+            spacing: Sp.s,
+            runSpacing: Sp.s,
+            children: [
+              for (final m in _presets)
+                _PresetChip(
+                  label: _shortLabel(m),
+                  selected: widget.target == m,
+                  onTap: () => _commit(m),
+                ),
+            ],
+          ),
+          const SizedBox(height: Sp.x3l),
           SizedBox(
             width: double.infinity,
             child: ElevatedButton(onPressed: widget.onNext, child: const Text('Continue')),
           ),
         ],
+      ),
+    );
+  }
+}
+
+class _PresetChip extends StatelessWidget {
+  final String label;
+  final bool selected;
+  final VoidCallback onTap;
+  const _PresetChip({
+    required this.label,
+    required this.selected,
+    required this.onTap,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final t = context.tokens;
+    return InkWell(
+      onTap: onTap,
+      borderRadius: BorderRadius.circular(R.s),
+      child: Container(
+        padding:
+            const EdgeInsets.symmetric(horizontal: Sp.md, vertical: Sp.s),
+        decoration: BoxDecoration(
+          color: selected ? t.ink : t.surfaceAlt,
+          borderRadius: BorderRadius.circular(R.s),
+          border: Border.all(color: selected ? t.ink : t.divider),
+        ),
+        child: Text(
+          label,
+          style: AppText.bodyStrong.copyWith(
+            color: selected ? t.bg : t.ink,
+            fontSize: 13,
+          ),
+        ),
       ),
     );
   }
@@ -421,7 +494,7 @@ class _FirstSessionPage extends StatelessWidget {
           OutlinedButton.icon(
             onPressed: () => showSubjectEditSheet(context),
             icon: const Icon(LucideIcons.plus),
-            label: const Text('Add a subject'),
+            label: const Text('Add focus blocks'),
           ),
           const SizedBox(height: Sp.md),
           Expanded(

@@ -56,7 +56,7 @@ class SettingsScreen extends StatelessWidget {
               ),
               _SimpleRow(
                 icon: LucideIcons.clockArrowUp,
-                label: 'Subjects',
+                label: 'Subjects and focus sessions',
                 trailing: 'Manage',
                 onTap: () => context.push('/settings/subjects'),
               ),

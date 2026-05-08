@@ -50,16 +50,23 @@ class _ActiveSessionTimerState extends State<ActiveSessionTimer> {
     final svc = AppServices.of(context);
     return ValueListenableBuilder<List<Subject>>(
       valueListenable: svc.subjects.all,
-      builder: (_, subjects, __) {
-        final active = currentlyActiveBlock(subjects, _now);
-        if (active == null) return const SizedBox.shrink();
-        final timing = computeBlockTiming(active, _now);
-        return _Header(
-          active: active,
-          timing: timing,
-          onTap: () => _openFloating(context, active),
-        );
-      },
+      builder: (_, subjects, __) => ValueListenableBuilder<AppSettings>(
+        valueListenable: svc.settings.settings,
+        builder: (_, settings, __) {
+          final active = currentlyActiveBlock(subjects, _now);
+          if (active == null) return const SizedBox.shrink();
+          final timing = computeBlockTiming(
+            active,
+            _now,
+            blockSizeMinutes: settings.blockSizeMinutes,
+          );
+          return _Header(
+            active: active,
+            timing: timing,
+            onTap: () => _openFloating(context, active),
+          );
+        },
+      ),
     );
   }
 
@@ -78,7 +85,7 @@ class _ActiveSessionTimerState extends State<ActiveSessionTimer> {
 class BlockTiming {
   final Duration totalRemaining;
 
-  /// Time until the next 15-minute quarter boundary, OR the start of the
+  /// Time until the next [blockSizeMinutes] boundary, OR the start of the
   /// pomodoro rest if that comes first (when pomodoro is enabled).
   final Duration toNextQuarter;
 
@@ -90,35 +97,75 @@ class BlockTiming {
   /// we have NOT yet reached rest, this is the time until rest starts.
   /// Otherwise it's the same as [toNextQuarter].
   final Duration toNextSignal;
+
+  /// The minute boundary used for [toNextQuarter] (15 / 30 / 60). Surfaced
+  /// so the UI can label "to next 30 min" instead of always "to log".
+  final int boundaryMinutes;
+
+  /// Computed rest-start. Null when pomodoro is off or the rest window does
+  /// not fit. Surfaced so the floating dialog can render the correct
+  /// "rest in N min" copy regardless of whether toggled mid-block.
+  final DateTime? restStartAt;
   const BlockTiming({
     required this.totalRemaining,
     required this.toNextQuarter,
     required this.inRestPeriod,
     required this.toNextSignal,
+    required this.boundaryMinutes,
+    this.restStartAt,
   });
 }
 
-BlockTiming computeBlockTiming(ActiveBlock active, DateTime now) {
+/// Map of `blockId -> when the user toggled pomodoro on mid-flight`. Lets
+/// `computeBlockTiming` size the rest window to the *remaining* time at
+/// toggle, rather than retroactively eating into focus the user already did.
+/// The map is in-memory only (resets on app restart). When pomodoro is on
+/// from the start of the block, the entry is missing and we fall back to
+/// the block's full duration as the reference.
+final Map<String, DateTime> _pomodoroToggleTimes = <String, DateTime>{};
+
+void notePomodoroToggle(String blockId, bool enabled, DateTime now) {
+  if (enabled) {
+    _pomodoroToggleTimes[blockId] = now;
+  } else {
+    _pomodoroToggleTimes.remove(blockId);
+  }
+}
+
+BlockTiming computeBlockTiming(
+  ActiveBlock active,
+  DateTime now, {
+  int blockSizeMinutes = 15,
+}) {
   var total = active.endAt.difference(now);
   if (total.isNegative) total = Duration.zero;
   final sinceStart = now.difference(active.startAt);
   final secondsSinceStart = sinceStart.inSeconds.clamp(0, 1 << 31);
-  final secondsToNextQuarter = 900 - (secondsSinceStart % 900);
+  final tickSeconds = blockSizeMinutes * 60;
+  final secondsToNextQuarter = tickSeconds - (secondsSinceStart % tickSeconds);
   var toNext = Duration(seconds: secondsToNextQuarter);
   if (toNext > total) toNext = total;
 
   Duration toNextSignal = toNext;
   bool inRest = false;
+  DateTime? restStartAt;
   if (active.block.pomodoroEnabled) {
-    final blockMinutes = active.endAt.difference(active.startAt).inMinutes;
+    // Reference point for the rest window: if the user toggled pomodoro
+    // mid-flight, size the rest from THAT moment forward instead of the
+    // block start. Otherwise rest scales with the full block duration.
+    final toggledAt = _pomodoroToggleTimes[active.block.id];
+    final ref = (toggledAt != null && toggledAt.isAfter(active.startAt))
+        ? toggledAt
+        : active.startAt;
+    final remainingMinutes = active.endAt.difference(ref).inMinutes;
     final restMinutes =
-        (blockMinutes * active.block.pomodoroPercent / 100).round();
-    if (restMinutes > 0 && restMinutes < blockMinutes) {
+        (remainingMinutes * active.block.pomodoroPercent / 100).round();
+    if (restMinutes > 0 && restMinutes < remainingMinutes) {
       final restStart =
           active.endAt.subtract(Duration(minutes: restMinutes));
+      restStartAt = restStart;
       if (!now.isBefore(restStart)) {
         inRest = true;
-        // While in rest, the next signal is just the block end.
         toNextSignal = total;
       } else {
         final toRest = restStart.difference(now);
@@ -132,6 +179,8 @@ BlockTiming computeBlockTiming(ActiveBlock active, DateTime now) {
     toNextQuarter: toNext,
     inRestPeriod: inRest,
     toNextSignal: toNextSignal,
+    boundaryMinutes: blockSizeMinutes,
+    restStartAt: restStartAt,
   );
 }
 
@@ -308,98 +357,123 @@ class _FloatingTimerDialogState extends State<_FloatingTimerDialog> {
       shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(R.m)),
       child: ValueListenableBuilder<List<Subject>>(
         valueListenable: svc.subjects.all,
-        builder: (_, subjects, __) {
-          final active = currentlyActiveBlock(subjects, _now);
-          if (active == null || active.block.id != widget.blockId) {
-            WidgetsBinding.instance.addPostFrameCallback((_) {
-              if (mounted) Navigator.of(context).pop();
-            });
-            return const SizedBox.shrink();
-          }
-          final timing = computeBlockTiming(active, _now);
-          final block = active.block;
-          final restMinutes =
-              ((active.endAt.difference(active.startAt).inMinutes) *
-                      block.pomodoroPercent /
-                      100)
-                  .round();
-          final secondaryLabel = timing.inRestPeriod
-              ? 'REST PERIOD'
-              : (block.pomodoroEnabled ? 'REST IN' : 'NEXT LOG IN');
-          return Padding(
-            padding: const EdgeInsets.fromLTRB(Sp.lg, Sp.lg, Sp.lg, Sp.lg),
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Row(
-                  children: [
-                    Expanded(
-                      child: Text(
-                        active.subject.name,
-                        style: AppText.headline.copyWith(color: t.ink),
-                        overflow: TextOverflow.ellipsis,
+        builder: (_, subjects, __) => ValueListenableBuilder<AppSettings>(
+          valueListenable: svc.settings.settings,
+          builder: (_, settings, __) {
+            final active = currentlyActiveBlock(subjects, _now);
+            if (active == null || active.block.id != widget.blockId) {
+              WidgetsBinding.instance.addPostFrameCallback((_) {
+                if (mounted) Navigator.of(context).pop();
+              });
+              return const SizedBox.shrink();
+            }
+            final size = settings.blockSizeMinutes;
+            final timing = computeBlockTiming(
+              active,
+              _now,
+              blockSizeMinutes: size,
+            );
+            final block = active.block;
+            // Rest-minutes copy in the pomodoro row mirrors the same
+            // "from-toggle" reference so users see realistic numbers when
+            // they enable pomodoro mid-flight.
+            final toggledAt = _pomodoroToggleTimes[block.id];
+            final ref = (toggledAt != null && toggledAt.isAfter(active.startAt))
+                ? toggledAt
+                : active.startAt;
+            final restMinutes =
+                ((active.endAt.difference(ref).inMinutes) *
+                        block.pomodoroPercent /
+                        100)
+                    .round();
+            final logLabel = size == 60
+                ? 'Log this hour'
+                : (size == 30 ? 'Log this 30 min' : 'Log this 15 min');
+            final restLabel = size == 60
+                ? 'NEXT LOG (HOURLY)'
+                : (size == 30 ? 'NEXT LOG (30 MIN)' : 'NEXT LOG (15 MIN)');
+            final secondaryLabel = timing.inRestPeriod
+                ? 'REST PERIOD'
+                : (block.pomodoroEnabled ? 'REST IN' : restLabel);
+            return Padding(
+              padding: const EdgeInsets.fromLTRB(Sp.lg, Sp.lg, Sp.lg, Sp.lg),
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Row(
+                    children: [
+                      Expanded(
+                        child: Text(
+                          active.subject.name,
+                          style: AppText.headline.copyWith(color: t.ink),
+                          overflow: TextOverflow.ellipsis,
+                        ),
                       ),
-                    ),
-                    IconButton(
-                      icon: const Icon(LucideIcons.x),
-                      onPressed: () => Navigator.of(context).pop(),
-                    ),
-                  ],
-                ),
-                Text(
-                  timing.inRestPeriod
-                      ? 'Rest period.  Take it. Log the focus you just did.'
-                      : 'Screen stays on while this is open.',
-                  style: AppText.label.copyWith(
-                    color: timing.inRestPeriod ? t.accent : t.inkMuted,
-                    fontWeight:
-                        timing.inRestPeriod ? FontWeight.w700 : FontWeight.w500,
+                      IconButton(
+                        icon: const Icon(LucideIcons.x),
+                        onPressed: () => Navigator.of(context).pop(),
+                      ),
+                    ],
                   ),
-                ),
-                const SizedBox(height: Sp.lg),
-                _BigTimerBlock(
-                  label: 'TIME LEFT IN BLOCK',
-                  value: _hms(timing.totalRemaining),
-                  emphasized: true,
-                  restMode: timing.inRestPeriod,
-                ),
-                const SizedBox(height: Sp.md),
-                _BigTimerBlock(
-                  label: secondaryLabel,
-                  value: _ms(timing.toNextSignal),
-                  emphasized: false,
-                  restMode: timing.inRestPeriod,
-                ),
-                const SizedBox(height: Sp.md),
-                _PomodoroRow(
-                  block: block,
-                  restMinutes: restMinutes,
-                  onToggle: (v) async {
-                    final svc = AppServices.of(context);
-                    await svc.subjects.updateBlock(
-                        block.copyWith(pomodoroEnabled: v));
-                  },
-                ),
-                const SizedBox(height: Sp.lg),
-                Row(
-                  children: [
-                    Expanded(
-                      child: OutlinedButton.icon(
-                        icon: const Icon(LucideIcons.bellRing),
-                        label: const Text('Log this quarter'),
-                        onPressed: () {
-                          Navigator.of(context).pop();
-                          context.go('/time?log=now');
-                        },
-                      ),
+                  Text(
+                    timing.inRestPeriod
+                        ? 'Rest period.  Take it. Log the focus you just did.'
+                        : 'Screen stays on while this is open.',
+                    style: AppText.label.copyWith(
+                      color: timing.inRestPeriod ? t.accent : t.inkMuted,
+                      fontWeight: timing.inRestPeriod
+                          ? FontWeight.w700
+                          : FontWeight.w500,
                     ),
-                  ],
-                ),
-              ],
-            ),
-          );
-        },
+                  ),
+                  const SizedBox(height: Sp.lg),
+                  _BigTimerBlock(
+                    label: 'TIME LEFT IN BLOCK',
+                    value: _hms(timing.totalRemaining),
+                    emphasized: true,
+                    restMode: timing.inRestPeriod,
+                  ),
+                  const SizedBox(height: Sp.md),
+                  _BigTimerBlock(
+                    label: secondaryLabel,
+                    value: _ms(timing.toNextSignal),
+                    emphasized: false,
+                    restMode: timing.inRestPeriod,
+                  ),
+                  const SizedBox(height: Sp.md),
+                  _PomodoroRow(
+                    block: block,
+                    restMinutes: restMinutes,
+                    onToggle: (v) async {
+                      // Track the toggle moment so rest is sized from the
+                      // remaining time, not the full block.
+                      notePomodoroToggle(block.id, v, DateTime.now());
+                      final svc = AppServices.of(context);
+                      await svc.subjects.updateBlock(
+                          block.copyWith(pomodoroEnabled: v));
+                    },
+                  ),
+                  const SizedBox(height: Sp.lg),
+                  Row(
+                    children: [
+                      Expanded(
+                        child: OutlinedButton.icon(
+                          icon: const Icon(LucideIcons.bellRing),
+                          label: Text(logLabel),
+                          onPressed: () {
+                            Navigator.of(context).pop();
+                            context.go('/time?log=now');
+                          },
+                        ),
+                      ),
+                    ],
+                  ),
+                ],
+              ),
+            );
+          },
+        ),
       ),
     );
   }
