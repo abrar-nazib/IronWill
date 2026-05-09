@@ -157,13 +157,35 @@ class NotificationsService {
     }
   }
 
+  /// Horizon for session-tick pre-scheduling. We only register alarms that
+  /// fire within this window; the 30 second reconcile ticker (in
+  /// `main.dart`) re-runs `rescheduleAll` to keep the queue topped up.
+  ///
+  /// Why a short horizon (instead of pre-scheduling the full week):
+  ///   * Mid-session settings changes propagate cleanly because the queue
+  ///     has at most a handful of alarms to invalidate.
+  ///   * No risk of id-namespace collisions piling up across many cycles.
+  ///   * If the user kills the app, the last few scheduled alarms still
+  ///     fire (AlarmManager survives process death). When the user returns
+  ///     within ~2 h, the ticker picks back up.
+  static const Duration sessionTickHorizon = Duration(hours: 2);
+
   Future<void> rescheduleAll({
     required List<Habit> habits,
     required List<Subject> subjects,
     required AppSettings settings,
   }) async {
     if (!_ready || !(Platform.isAndroid || Platform.isIOS)) return;
-    await _plugin.cancelAll();
+    // `cancelAll()` proved unreliable in practice on Android: the plugin's
+    // internal tracking can drift from the OS AlarmManager (especially
+    // after `install -r`), so stale alarms survive into the new schedule.
+    // Enumerate pendingNotificationRequests and cancel each by id - this
+    // is the same set the plugin would walk internally, but doing it
+    // explicitly forces a fresh cycle.
+    final pending = await _plugin.pendingNotificationRequests();
+    for (final p in pending) {
+      await _plugin.cancel(p.id);
+    }
     if (settings.reminderLogging) {
       for (final h in habits.where((h) => !h.archived && h.reminderOn)) {
         await _scheduleHabitReminder(h, settings.alarm);
@@ -174,20 +196,23 @@ class NotificationsService {
     // does not always know the system's IANA zone, so we cannot rely on
     // tz.local for wall-clock arithmetic).
     final now = DateTime.now();
-    for (int dayOffset = 0; dayOffset < 7; dayOffset++) {
+    final horizon = now.add(sessionTickHorizon);
+    // Look ahead at most 1 day. With a 2 h horizon, day offset 1 is only
+    // relevant in the rare case of a session that crosses midnight.
+    for (int dayOffset = 0; dayOffset < 2; dayOffset++) {
       final date = DateTime(now.year, now.month, now.day + dayOffset);
       for (final s in subjects) {
         if (!s.isLiveOn(date)) continue;
         for (final b in s.blocks) {
           if (b.dayOfWeek != date.weekday) continue;
-          await _scheduleBlockForDay(s, b, date, settings);
+          await _scheduleBlockForDay(s, b, date, settings, horizon);
         }
       }
     }
-    // The persistent "session active" notification is now driven by a proper
-    // foreground service (see FocusSessionForegroundController) so it persists
-    // like the system flashlight notification rather than a regular ongoing
-    // notification that Android can dismiss.
+    // The persistent "session active" notification is driven by a proper
+    // foreground service (see FocusSessionForegroundController) so it
+    // persists like the system flashlight notification rather than a
+    // regular ongoing notification that Android can dismiss.
   }
 
   /// User-triggered "send a notification right now" for the test button in
@@ -229,6 +254,7 @@ class NotificationsService {
     SubjectBlock block,
     DateTime date,
     AppSettings settings,
+    DateTime horizon,
   ) async {
     final start = DateTime(
         date.year, date.month, date.day, block.start.hour, block.start.minute);
@@ -262,6 +288,10 @@ class NotificationsService {
       final naiveCycleEnd = cycleStart.add(cycleStep);
       final cycleEnd = naiveCycleEnd.isAfter(end) ? end : naiveCycleEnd;
       final cycleDurationMin = cycleEnd.difference(cycleStart).inMinutes;
+
+      // Stop scheduling once we're past the look-ahead horizon. The
+      // reconcile ticker will refresh the queue when these are nearer.
+      if (cycleStart.isAfter(horizon)) break;
 
       // Mandatory log tick at the end of the cycle.
       //

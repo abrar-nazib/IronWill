@@ -78,8 +78,18 @@ class _LockedInAppState extends State<LockedInApp> with WidgetsBindingObserver {
       // Catch session start/end transitions while the app is open across the
       // boundary. Without this, the foreground service only starts when the
       // user re-opens the app or saves a session/habit.
-      _reconcileTicker = Timer.periodic(const Duration(seconds: 30), (_) {
-        FocusSessionForegroundController.reconcile(
+      // Refresh the foreground service AND keep the session-tick alarm
+      // queue topped up. With NotificationsService.sessionTickHorizon
+      // pegged at ~2 h, this 30 s loop is what slides the window forward
+      // through long sessions without ever holding stale alarms past a
+      // settings change.
+      _reconcileTicker = Timer.periodic(const Duration(seconds: 30), (_) async {
+        await widget.services.notifications.rescheduleAll(
+          habits: widget.services.habits.all.value,
+          subjects: widget.services.subjects.all.value,
+          settings: widget.services.settings.settings.value,
+        );
+        await FocusSessionForegroundController.reconcile(
           widget.services.subjects.all.value,
           settings: widget.services.settings.settings.value,
         );
