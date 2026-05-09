@@ -138,6 +138,10 @@ class _HabitEditSheetState extends State<_HabitEditSheet> {
 
   Future<void> _save() async {
     if (_name.text.trim().isEmpty) return;
+    // Drop focus so the soft keyboard hides as the sheet pops and we
+    // return to whatever was underneath (usually the onboarding page or
+    // the habits screen).
+    FocusScope.of(context).unfocus();
     setState(() => _saving = true);
     final svc = AppServices.of(context);
     final h = widget.existing;
@@ -238,7 +242,10 @@ class _HabitEditSheetState extends State<_HabitEditSheet> {
                   ),
                   IconButton(
                     icon: const Icon(LucideIcons.x),
-                    onPressed: () => Navigator.of(context).pop(),
+                    onPressed: () {
+                      FocusScope.of(context).unfocus();
+                      Navigator.of(context).pop();
+                    },
                   ),
                 ],
               ),
@@ -853,6 +860,7 @@ class _FieldEditorDialogState extends State<_FieldEditorDialog> {
       setState(() => _error = 'Field key cannot be empty.');
       return;
     }
+    FocusScope.of(context).unfocus();
     Navigator.of(context).pop(HabitField(key: key, type: _type));
   }
 
@@ -864,7 +872,14 @@ class _FieldEditorDialogState extends State<_FieldEditorDialog> {
       title: Text(widget.initial == null ? 'New field' : 'Edit field',
           style: AppText.headline.copyWith(color: t.ink, fontSize: 22)),
       contentPadding: const EdgeInsets.fromLTRB(Sp.md, Sp.s, Sp.md, 0),
-      content: SingleChildScrollView(
+      // double.maxFinite gives AlertDialog a concrete width to lay out
+      // against, which is required because the children below contain
+      // Expanded inside a Row. Without this AlertDialog falls back to
+      // IntrinsicWidth, Expanded fails to size, and the whole sheet
+      // paints black behind the dialog.
+      content: SizedBox(
+        width: double.maxFinite,
+        child: SingleChildScrollView(
         child: Column(
           mainAxisSize: MainAxisSize.min,
           crossAxisAlignment: CrossAxisAlignment.start,
@@ -901,6 +916,7 @@ class _FieldEditorDialogState extends State<_FieldEditorDialog> {
                 onTap: () => setState(() => _type = tp),
               ),
           ],
+        ),
         ),
       ),
       actions: [

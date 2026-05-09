@@ -4,11 +4,16 @@ import '../../models/utilization.dart';
 import '../../theme/tokens.dart';
 import '../../theme/typography.dart';
 
-String quarterLabel(int q) {
+/// Render a "HH:MM to HH:MM" label spanning the [blockSizeMinutes] window
+/// that starts at quarter [q]. The 15 minute granularity of `q` survives:
+/// a 30-min block at quarter 4 reads "01:00 to 01:30".
+String quarterLabel(int q, {int blockSizeMinutes = 15}) {
+  final stride = blockSizeMinutes ~/ 15;
+  final endIdx = q + stride;
   final h = (q ~/ 4).toString().padLeft(2, '0');
   final m = ((q % 4) * 15).toString().padLeft(2, '0');
-  final endH = (((q + 1) ~/ 4) % 24).toString().padLeft(2, '0');
-  final endM = (((q + 1) % 4) * 15).toString().padLeft(2, '0');
+  final endH = ((endIdx ~/ 4) % 24).toString().padLeft(2, '0');
+  final endM = ((endIdx % 4) * 15).toString().padLeft(2, '0');
   return '$h:$m to $endH:$endM';
 }
 
@@ -16,19 +21,33 @@ Future<Utilization?> showLogBlockSheet(
   BuildContext context, {
   required Utilization current,
   required int quarterIndex,
+  int blockSizeMinutes = 15,
 }) {
   return showModalBottomSheet<Utilization>(
     context: context,
     isScrollControlled: true,
     backgroundColor: Theme.of(context).extension<AppTokens>()!.surface,
-    builder: (ctx) => _LogSheet(current: current, quarterIndex: quarterIndex),
+    builder: (ctx) => _LogSheet(
+      current: current,
+      quarterIndex: quarterIndex,
+      blockSizeMinutes: blockSizeMinutes,
+    ),
   );
 }
 
 class _LogSheet extends StatelessWidget {
   final Utilization current;
   final int quarterIndex;
-  const _LogSheet({required this.current, required this.quarterIndex});
+  final int blockSizeMinutes;
+  const _LogSheet({
+    required this.current,
+    required this.quarterIndex,
+    required this.blockSizeMinutes,
+  });
+
+  String get _title => blockSizeMinutes == 60
+      ? 'Log this hour'
+      : (blockSizeMinutes == 30 ? 'Log this 30 min' : 'Log this 15 min');
 
   @override
   Widget build(BuildContext context) {
@@ -61,9 +80,10 @@ class _LogSheet extends StatelessWidget {
               ),
             ),
             const SizedBox(height: Sp.md),
-            Text('Log this quarter', style: AppText.headline.copyWith(color: t.ink)),
+            Text(_title, style: AppText.headline.copyWith(color: t.ink)),
             const SizedBox(height: 2),
-            Text(quarterLabel(quarterIndex), style: AppText.label.copyWith(color: t.inkMuted)),
+            Text(quarterLabel(quarterIndex, blockSizeMinutes: blockSizeMinutes),
+                style: AppText.label.copyWith(color: t.inkMuted)),
             const SizedBox(height: Sp.md),
             for (final u in options) _Row(
               util: u,

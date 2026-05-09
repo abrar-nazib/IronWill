@@ -83,7 +83,10 @@ class AppServices {
           subjects: svc.subjects.all.value,
           settings: svc.settings.settings.value,
         );
-        await FocusSessionForegroundController.reconcile(svc.subjects.all.value);
+        await FocusSessionForegroundController.reconcile(
+          svc.subjects.all.value,
+          settings: svc.settings.settings.value,
+        );
       });
     }
     svc.habits.all.addListener(reschedule);

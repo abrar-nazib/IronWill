@@ -763,6 +763,57 @@ class SqliteStatsRepository implements StatsRepository {
       }
     }
 
+    // Per-subject focus rows. For each day in the period, walk the live
+    // subjects' blocks scheduled on that weekday and intersect with the
+    // logged quarters. Aggregate weighted minutes per subject id, then
+    // emit one row per subject that had at least one scheduled minute.
+    final subjFocus = <String, double>{};
+    final subjScheduled = <String, int>{};
+    final subjLogged = <String, int>{};
+    final subjPctSum = <String, int>{};
+    final subjPctCount = <String, int>{};
+    for (final d in days) {
+      for (final s in allSubjects) {
+        if (!s.isLiveOn(d.date)) continue;
+        for (final b in s.blocks) {
+          if (b.dayOfWeek != d.date.weekday) continue;
+          final startQ = (b.startMinute ~/ 15).clamp(0, 96);
+          final endQ = (b.endMinute ~/ 15).clamp(0, 96);
+          if (endQ <= startQ) continue;
+          subjScheduled.update(s.id, (v) => v + (endQ - startQ) * 15,
+              ifAbsent: () => (endQ - startQ) * 15);
+          for (var q = startQ; q < endQ; q++) {
+            final p = d.quarters[q].percent;
+            if (p == null) continue;
+            subjFocus.update(s.id, (v) => v + p * 15 / 100,
+                ifAbsent: () => p * 15 / 100);
+            subjLogged.update(s.id, (v) => v + 1, ifAbsent: () => 1);
+            subjPctSum.update(s.id, (v) => v + p, ifAbsent: () => p);
+            subjPctCount.update(s.id, (v) => v + 1, ifAbsent: () => 1);
+          }
+        }
+      }
+    }
+    final subjectRows = <SubjectStatsRow>[];
+    for (final s in allSubjects) {
+      final scheduled = subjScheduled[s.id] ?? 0;
+      if (scheduled == 0) continue;
+      final logged = subjLogged[s.id] ?? 0;
+      final focused = (subjFocus[s.id] ?? 0).round();
+      final pctCount = subjPctCount[s.id] ?? 0;
+      final avgPct = pctCount == 0
+          ? null
+          : ((subjPctSum[s.id] ?? 0) / pctCount).round();
+      subjectRows.add(SubjectStatsRow(
+        id: s.id,
+        name: s.name,
+        focusedMinutes: focused,
+        scheduledMinutes: scheduled,
+        loggedQuarters: logged,
+        avgUtilizationPct: avgPct,
+      ));
+    }
+
     // Per-habit hit / evaluated rows for the period (last 7 days).
     final habitRows = <HabitWeeklyRow>[];
     for (final h in habits) {
@@ -799,6 +850,7 @@ class SqliteStatsRepository implements StatsRepository {
       hourlyMinutes: hourly,
       unloggedFocusQuarters: unlogged,
       habitRows: habitRows,
+      subjectRows: subjectRows,
     );
   }
 }

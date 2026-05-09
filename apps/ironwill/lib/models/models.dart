@@ -554,6 +554,43 @@ class DashboardStats {
   });
 }
 
+/// Per-subject focus breakdown used inside [WeeklyStats]. Lets the Stats
+/// screen show how minutes are distributed across the user's subjects so
+/// they can see which one is pulling its weight in any period.
+///
+/// Attribution is schedule-based: a logged quarter is credited to a
+/// subject only when it falls inside that subject's scheduled block on
+/// the same weekday. Quarters outside any scheduled window are not
+/// attributed (they still count toward the global focused total).
+class SubjectStatsRow {
+  final String id;
+  final String name;
+
+  /// Weighted focus minutes (utilization-aware). 100% quarter contributes
+  /// 15 min, 75% → 11.25, etc. Same convention as [DayBlocks.focusedMinutes].
+  final int focusedMinutes;
+
+  /// Total minutes of this subject's blocks that fell inside the period.
+  /// Equals "if every quarter were logged at 100%" — the ceiling.
+  final int scheduledMinutes;
+
+  /// Count of 15-min quarters inside scheduled blocks that have a
+  /// non-none, non-notFocus utilization stamp.
+  final int loggedQuarters;
+
+  /// Avg utilization percent of LOGGED quarters in this subject's
+  /// scheduled windows (0..100). Null when nothing was logged.
+  final int? avgUtilizationPct;
+  const SubjectStatsRow({
+    required this.id,
+    required this.name,
+    required this.focusedMinutes,
+    required this.scheduledMinutes,
+    required this.loggedQuarters,
+    required this.avgUtilizationPct,
+  });
+}
+
 /// Per-habit row used inside [WeeklyStats] so the user can see which habit is
 /// pulling the average up or down without leaving the Stats screen.
 class HabitWeeklyRow {
@@ -616,6 +653,10 @@ class WeeklyStats {
   /// sort, color, and rank.
   final List<HabitWeeklyRow> habitRows;
 
+  /// One row per subject that had at least one scheduled block in the
+  /// period. Subjects with no schedule overlap the period are skipped.
+  final List<SubjectStatsRow> subjectRows;
+
   const WeeklyStats({
     required this.focusMinutesByDay,
     required this.days,
@@ -630,5 +671,6 @@ class WeeklyStats {
     required this.hourlyMinutes,
     required this.unloggedFocusQuarters,
     required this.habitRows,
+    required this.subjectRows,
   });
 }

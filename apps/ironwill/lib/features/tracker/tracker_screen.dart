@@ -159,7 +159,7 @@ class _TrackerScreenState extends State<TrackerScreen> {
           final size = settings.blockSizeMinutes;
           final label = size == 60
               ? 'Log this hour'
-              : (size == 30 ? 'Log this 30 min' : 'Log this quarter');
+              : (size == 30 ? 'Log this 30 min' : 'Log this 15 min');
           return FloatingActionButton.extended(
             icon: const Icon(LucideIcons.bellRing),
             label: Text(label),
@@ -194,6 +194,7 @@ class _TrackerScreenState extends State<TrackerScreen> {
       context,
       current: aggregated,
       quarterIndex: firstIndex,
+      blockSizeMinutes: blockSize,
     );
     if (picked == null) return;
     for (var i = 0; i < stride; i++) {
@@ -273,100 +274,27 @@ class _GridCard extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final t = context.tokens;
     final svc = AppServices.of(context);
     return ValueListenableBuilder<AppSettings>(
       valueListenable: svc.settings.settings,
       builder: (_, settings, __) {
         final size = settings.blockSizeMinutes;
-        final cellsPerRow =
-            size == 60 ? 1 : (size == 30 ? 2 : 4);
         return AppCard(
           padding: const EdgeInsets.all(Sp.md),
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              SectionHeader(
-                '24 hour grid',
-                trailing: _BlockSizePicker(
-                  current: size,
-                  onPick: (v) => svc.settings
-                      .update(settings.copyWith(blockSizeMinutes: v)),
-                ),
-              ),
-              Text(
-                size == 15
-                    ? 'Each row is one hour, four 15 minute quarters.'
-                    : (size == 30
-                        ? 'Each row is one hour, two 30 minute halves.'
-                        : 'Each row is one hour. Tap to log the whole hour.'),
-                style: AppText.label.copyWith(color: t.inkMuted),
-              ),
-              const SizedBox(height: Sp.md),
+              const SectionHeader('24 hour grid'),
+              const SizedBox(height: Sp.s),
               QuarterGrid(
                 quarters: day.quarters,
                 blockSizeMinutes: size,
                 onTap: onTap,
               ),
-              if (cellsPerRow != 4) ...[
-                const SizedBox(height: Sp.s),
-                Text(
-                  'Stored as 15 min sub-blocks. Switch back any time without losing data.',
-                  style: AppText.label.copyWith(
-                    color: t.inkMuted,
-                    fontSize: 11,
-                  ),
-                ),
-              ],
             ],
           ),
         );
       },
-    );
-  }
-}
-
-class _BlockSizePicker extends StatelessWidget {
-  final int current;
-  final ValueChanged<int> onPick;
-  const _BlockSizePicker({required this.current, required this.onPick});
-
-  @override
-  Widget build(BuildContext context) {
-    final t = context.tokens;
-    Widget chip(int value, String label) {
-      final selected = value == current;
-      return InkWell(
-        borderRadius: BorderRadius.circular(R.s),
-        onTap: () => onPick(value),
-        child: Container(
-          padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
-          decoration: BoxDecoration(
-            color: selected ? t.ink : Colors.transparent,
-            borderRadius: BorderRadius.circular(R.s),
-            border: Border.all(color: selected ? t.ink : t.divider),
-          ),
-          child: Text(
-            label,
-            style: AppText.label.copyWith(
-              color: selected ? t.bg : t.inkMuted,
-              fontWeight: FontWeight.w700,
-              fontSize: 11,
-            ),
-          ),
-        ),
-      );
-    }
-
-    return Row(
-      mainAxisSize: MainAxisSize.min,
-      children: [
-        chip(15, '15m'),
-        const SizedBox(width: 4),
-        chip(30, '30m'),
-        const SizedBox(width: 4),
-        chip(60, '1h'),
-      ],
     );
   }
 }

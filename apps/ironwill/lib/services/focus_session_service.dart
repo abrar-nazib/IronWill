@@ -1,8 +1,10 @@
 import 'dart:async';
 
+import 'package:flutter/material.dart' show TimeOfDay;
 import 'package:flutter_foreground_task/flutter_foreground_task.dart';
 
 import '../models/models.dart';
+import '../widgets/active_session_timer.dart' show computeBlockTiming;
 
 /// Foreground service that anchors a system-tray persistent notification while
 /// any focus session is in its scheduled window. Behaves like the flashlight
@@ -43,12 +45,17 @@ class FocusSessionForegroundController {
     _initialised = true;
   }
 
-  /// Reconcile the live state. If a non-expired subject's block is active and
-  /// the service is not running, start it. If no block is active and the
-  /// service is running, stop it. Idempotent on each call. After start/update,
-  /// the active block's start and end (epoch ms) are sent to the task isolate
-  /// so its 1Hz repeat tick can render a live dual timer in the notification.
-  static Future<void> reconcile(List<Subject> subjects) async {
+  /// Reconcile the live state. If a non-expired subject's block is active
+  /// and the service is not running, start it. If no block is active and
+  /// the service is running, stop it. Idempotent on each call. After
+  /// start/update, the active block's start, end, the user's blockSize and
+  /// pomodoro settings are sent to the task isolate so its 1Hz tick
+  /// renders a live timer in the notification using the same math as the
+  /// in-app dialog.
+  static Future<void> reconcile(
+    List<Subject> subjects, {
+    required AppSettings settings,
+  }) async {
     init();
     final running = await FlutterForegroundTask.isRunningService;
     final active = currentlyActiveBlock(subjects, DateTime.now());
@@ -58,7 +65,7 @@ class FocusSessionForegroundController {
       }
       return;
     }
-    final initialBody = _renderBody(active.startAt, active.endAt, DateTime.now());
+    final initialBody = _renderBody(active, DateTime.now(), settings);
     if (running) {
       await FlutterForegroundTask.updateService(
         notificationTitle: 'Focus: ${active.subject.name}',
@@ -71,7 +78,7 @@ class FocusSessionForegroundController {
         notificationTitle: 'Focus: ${active.subject.name}',
         notificationText: initialBody,
         notificationButtons: const [
-          NotificationButton(id: 'log', text: 'Log quarter'),
+          NotificationButton(id: 'log', text: 'Log block'),
         ],
         callback: focusSessionTaskCallback,
       );
@@ -80,21 +87,48 @@ class FocusSessionForegroundController {
       'startMs': active.startAt.millisecondsSinceEpoch,
       'endMs': active.endAt.millisecondsSinceEpoch,
       'name': active.subject.name,
+      'blockSize': settings.blockSizeMinutes,
+      'pomoOn': settings.pomodoroEnabled,
+      'pomoPercent': settings.pomodoroPercent,
     });
   }
 
-  /// Same dual-timer string the in-app pill renders. Kept here as a static so
-  /// both isolates can render the same shape on first paint.
-  static String _renderBody(DateTime start, DateTime end, DateTime now) {
-    final total = _max(end.difference(now), Duration.zero);
-    final since = now.difference(start).inSeconds.clamp(0, 1 << 31);
-    final secondsToNext = 900 - (since % 900);
-    var toNext = Duration(seconds: secondsToNext);
-    if (toNext > total) toNext = total;
-    return 'Total ${_hms(total)}  ·  Log in ${_ms(toNext)}';
+  /// Render the tray body using the same math as the in-app dialog so the
+  /// numbers stay consistent across surfaces. Four formats:
+  ///   * before block start:     "Starts in MM:SS"
+  ///   * pomodoro off, in-block: "Total HH:MM:SS  ·  Log in MM:SS"
+  ///   * pomodoro on, focusing:  "Total HH:MM:SS  ·  Rest in MM:SS"
+  ///   * pomodoro on, resting:   "Total HH:MM:SS  ·  Resting"
+  static String _renderBody(
+    ActiveBlock active,
+    DateTime now,
+    AppSettings settings,
+  ) {
+    // Guard: block hasn't started yet. Without this, the in-block math
+    // produces a negative "since start" that mods to a meaningless "Log
+    // in" countdown, making the user believe the session is live.
+    if (now.isBefore(active.startAt)) {
+      final toStart = active.startAt.difference(now);
+      return 'Starts in ${_ms(toStart)}';
+    }
+    final timing = computeBlockTiming(
+      active,
+      now,
+      blockSizeMinutes: settings.blockSizeMinutes,
+      pomodoroEnabled: settings.pomodoroEnabled,
+      pomodoroPercent: settings.pomodoroPercent,
+    );
+    final total = _hms(timing.totalRemaining);
+    if (!settings.pomodoroEnabled) {
+      return 'Total $total  ·  Log in ${_ms(timing.toNextLog)}';
+    }
+    if (timing.inRestPeriod) {
+      return 'Total $total  ·  Resting';
+    }
+    final next = timing.toNextRest ?? timing.toNextLog;
+    return 'Total $total  ·  Rest in ${_ms(next)}';
   }
 
-  static Duration _max(Duration a, Duration b) => a > b ? a : b;
   static String _hms(Duration d) {
     final h = d.inHours;
     final m = d.inMinutes.remainder(60);
@@ -126,6 +160,9 @@ class _FocusSessionTaskHandler extends TaskHandler {
   int? _startMs;
   int? _endMs;
   String _name = 'Focus session';
+  int _blockSize = 15;
+  bool _pomoOn = false;
+  int _pomoPercent = 15;
 
   @override
   Future<void> onStart(DateTime timestamp, TaskStarter starter) async {}
@@ -136,6 +173,9 @@ class _FocusSessionTaskHandler extends TaskHandler {
     _startMs = (data['startMs'] as num?)?.toInt();
     _endMs = (data['endMs'] as num?)?.toInt();
     _name = (data['name'] as String?) ?? _name;
+    _blockSize = (data['blockSize'] as num?)?.toInt() ?? _blockSize;
+    _pomoOn = (data['pomoOn'] as bool?) ?? _pomoOn;
+    _pomoPercent = (data['pomoPercent'] as num?)?.toInt() ?? _pomoPercent;
     _refreshNotification();
   }
 
@@ -148,7 +188,47 @@ class _FocusSessionTaskHandler extends TaskHandler {
     if (_startMs == null || _endMs == null) return;
     final start = DateTime.fromMillisecondsSinceEpoch(_startMs!);
     final end = DateTime.fromMillisecondsSinceEpoch(_endMs!);
-    final body = FocusSessionForegroundController._renderBody(start, end, DateTime.now());
+    final now = DateTime.now();
+    // Self-stop guard. Without this, an app process killed mid-session
+    // (Samsung battery saver, OOM, force-stop) would leave the task
+    // isolate ticking forever with stale start/end. Stop 5 minutes after
+    // the block's scheduled end so brief overruns or quick logging still
+    // see the timer.
+    if (now.isAfter(end.add(const Duration(minutes: 5)))) {
+      FlutterForegroundTask.stopService();
+      return;
+    }
+    // Synthesise the inputs the in-app math wants. The task isolate has
+    // no AppServices; ActiveBlock just needs startAt/endAt for the timer
+    // and stub Subject/SubjectBlock objects to satisfy the type.
+    final stubBlock = SubjectBlock(
+      id: 'fg',
+      subjectId: 'fg',
+      dayOfWeek: start.weekday,
+      start: TimeOfDay(hour: start.hour, minute: start.minute),
+      end: TimeOfDay(hour: end.hour, minute: end.minute),
+    );
+    final stubSubject = Subject(
+      id: 'fg',
+      name: _name,
+      expiresAt: end,
+      createdAt: start,
+      order: 0,
+      blocks: [stubBlock],
+    );
+    final active = ActiveBlock(
+      subject: stubSubject,
+      block: stubBlock,
+      startAt: start,
+      endAt: end,
+    );
+    final settings = AppSettings(
+      blockSizeMinutes: _blockSize,
+      pomodoroEnabled: _pomoOn,
+      pomodoroPercent: _pomoPercent,
+    );
+    final body = FocusSessionForegroundController._renderBody(
+        active, DateTime.now(), settings);
     FlutterForegroundTask.updateService(
       notificationTitle: 'Focus: $_name',
       notificationText: body,

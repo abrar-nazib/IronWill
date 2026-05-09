@@ -59,6 +59,8 @@ class _ActiveSessionTimerState extends State<ActiveSessionTimer> {
             active,
             _now,
             blockSizeMinutes: settings.blockSizeMinutes,
+            pomodoroEnabled: settings.pomodoroEnabled,
+            pomodoroPercent: settings.pomodoroPercent,
           );
           return _Header(
             active: active,
@@ -79,106 +81,109 @@ class _ActiveSessionTimerState extends State<ActiveSessionTimer> {
   }
 }
 
-/// Pure data: time math for an active block, computed off [now]. Includes
-/// pomodoro context so the UI can tint the rest period and the "next log"
-/// label can flip to "rest in" when pomodoro is enabled.
+/// Pure data: time math for an active block, computed off [now]. The UI
+/// reads block-size and pomodoro state from the user's settings, so this
+/// recomputes from scratch each tick. Three independent countdowns are
+/// surfaced so the dialog can render up to three timers without merging.
 class BlockTiming {
+  /// Time left until the block ends.
   final Duration totalRemaining;
 
-  /// Time until the next [blockSizeMinutes] boundary, OR the start of the
-  /// pomodoro rest if that comes first (when pomodoro is enabled).
-  final Duration toNextQuarter;
+  /// Time until the next accountability log boundary (15 / 30 / 60 min,
+  /// driven by the user's block-size setting). Capped at [totalRemaining]
+  /// so the last partial bucket doesn't overshoot.
+  final Duration toNextLog;
 
-  /// True if pomodoro is on for this block AND `now` has crossed the rest
-  /// boundary. Drives the "you're resting" tint and label.
+  /// Time until pomodoro rest starts. `null` when pomodoro is off, when
+  /// the rest window doesn't fit (would be 0 or full block), or when we
+  /// are already inside the rest window.
+  final Duration? toNextRest;
+
+  /// True if pomodoro is on for this block AND `now` has crossed the
+  /// rest-start boundary. Drives the "you're resting" tint and label.
   final bool inRestPeriod;
 
-  /// The countdown the timer should display next. When pomodoro is on and
-  /// we have NOT yet reached rest, this is the time until rest starts.
-  /// Otherwise it's the same as [toNextQuarter].
-  final Duration toNextSignal;
-
-  /// The minute boundary used for [toNextQuarter] (15 / 30 / 60). Surfaced
+  /// The minute boundary used for [toNextLog] (15 / 30 / 60). Surfaced
   /// so the UI can label "to next 30 min" instead of always "to log".
   final int boundaryMinutes;
 
-  /// Computed rest-start. Null when pomodoro is off or the rest window does
-  /// not fit. Surfaced so the floating dialog can render the correct
-  /// "rest in N min" copy regardless of whether toggled mid-block.
+  /// Computed rest-start. Null when pomodoro is off or the rest window
+  /// does not fit. Stable reference so the UI can show "Rest at 09:51".
   final DateTime? restStartAt;
   const BlockTiming({
     required this.totalRemaining,
-    required this.toNextQuarter,
+    required this.toNextLog,
+    required this.toNextRest,
     required this.inRestPeriod,
-    required this.toNextSignal,
     required this.boundaryMinutes,
     this.restStartAt,
   });
 }
 
-/// Map of `blockId -> when the user toggled pomodoro on mid-flight`. Lets
-/// `computeBlockTiming` size the rest window to the *remaining* time at
-/// toggle, rather than retroactively eating into focus the user already did.
-/// The map is in-memory only (resets on app restart). When pomodoro is on
-/// from the start of the block, the entry is missing and we fall back to
-/// the block's full duration as the reference.
-final Map<String, DateTime> _pomodoroToggleTimes = <String, DateTime>{};
-
-void notePomodoroToggle(String blockId, bool enabled, DateTime now) {
-  if (enabled) {
-    _pomodoroToggleTimes[blockId] = now;
-  } else {
-    _pomodoroToggleTimes.remove(blockId);
-  }
-}
-
+/// Per-cycle pomodoro: each logging cycle of [blockSizeMinutes] is treated
+/// as one pomodoro slot. The slot is split into a focus phase and a rest
+/// phase at [pomodoroPercent]. Example: blockSize 30 + pomo 15% gives focus
+/// 25 min then rest 5 min, repeated until session end.
+///
+/// Returns three independent countdowns so the floating dialog can show
+/// them as separate cards:
+///   * [BlockTiming.totalRemaining] — until the subject session ends.
+///   * [BlockTiming.toNextLog] — until the current cycle boundary
+///     (always end-of-cycle, regardless of pomodoro).
+///   * [BlockTiming.toNextRest] — until rest starts inside the current
+///     cycle, or null when pomodoro is off / already inside rest.
 BlockTiming computeBlockTiming(
   ActiveBlock active,
   DateTime now, {
   int blockSizeMinutes = 15,
+  bool pomodoroEnabled = false,
+  int pomodoroPercent = 15,
 }) {
   var total = active.endAt.difference(now);
   if (total.isNegative) total = Duration.zero;
-  final sinceStart = now.difference(active.startAt);
-  final secondsSinceStart = sinceStart.inSeconds.clamp(0, 1 << 31);
-  final tickSeconds = blockSizeMinutes * 60;
-  final secondsToNextQuarter = tickSeconds - (secondsSinceStart % tickSeconds);
-  var toNext = Duration(seconds: secondsToNextQuarter);
-  if (toNext > total) toNext = total;
 
-  Duration toNextSignal = toNext;
+  // Locate the current cycle. A cycle starts every blockSizeMinutes counted
+  // from the subject session's startAt. The very last cycle may be cut
+  // short when (endAt - cycleStart) < cycleSeconds.
+  final cycleSeconds = blockSizeMinutes * 60;
+  final secondsSinceStart =
+      now.difference(active.startAt).inSeconds.clamp(0, 1 << 31);
+  final cycleIndex = secondsSinceStart ~/ cycleSeconds;
+  final cycleStart = active.startAt
+      .add(Duration(seconds: cycleIndex * cycleSeconds));
+  final naiveCycleEnd =
+      cycleStart.add(Duration(seconds: cycleSeconds));
+  final cycleEnd =
+      naiveCycleEnd.isAfter(active.endAt) ? active.endAt : naiveCycleEnd;
+
+  var toNextLog = cycleEnd.difference(now);
+  if (toNextLog.isNegative) toNextLog = Duration.zero;
+
   bool inRest = false;
   DateTime? restStartAt;
-  if (active.block.pomodoroEnabled) {
-    // Reference point for the rest window: if the user toggled pomodoro
-    // mid-flight, size the rest from THAT moment forward instead of the
-    // block start. Otherwise rest scales with the full block duration.
-    final toggledAt = _pomodoroToggleTimes[active.block.id];
-    final ref = (toggledAt != null && toggledAt.isAfter(active.startAt))
-        ? toggledAt
-        : active.startAt;
-    final remainingMinutes = active.endAt.difference(ref).inMinutes;
-    final restMinutes =
-        (remainingMinutes * active.block.pomodoroPercent / 100).round();
-    if (restMinutes > 0 && restMinutes < remainingMinutes) {
-      final restStart =
-          active.endAt.subtract(Duration(minutes: restMinutes));
+  Duration? toNextRest;
+  if (pomodoroEnabled) {
+    final cycleDurationSeconds =
+        cycleEnd.difference(cycleStart).inSeconds;
+    final restSeconds =
+        (cycleDurationSeconds * pomodoroPercent / 100).round();
+    if (restSeconds > 0 && restSeconds < cycleDurationSeconds) {
+      final restStart = cycleEnd.subtract(Duration(seconds: restSeconds));
       restStartAt = restStart;
       if (!now.isBefore(restStart)) {
         inRest = true;
-        toNextSignal = total;
+        toNextRest = null;
       } else {
-        final toRest = restStart.difference(now);
-        if (toRest < toNextSignal) toNextSignal = toRest;
+        toNextRest = restStart.difference(now);
       }
     }
   }
 
   return BlockTiming(
     totalRemaining: total,
-    toNextQuarter: toNext,
+    toNextLog: toNextLog,
+    toNextRest: toNextRest,
     inRestPeriod: inRest,
-    toNextSignal: toNextSignal,
     boundaryMinutes: blockSizeMinutes,
     restStartAt: restStartAt,
   );
@@ -212,13 +217,14 @@ class _Header extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final t = context.tokens;
-    // During pomodoro rest the pill switches from ember to a calmer steel tone
-    // so the user sees at a glance that they're in a break, not a focus block.
+    // During pomodoro rest the pill switches from ember to a calmer steel
+    // tone so the user sees at a glance that they're in a break, not a
+    // focus block. The header always shows two timers (total + to-next-log);
+    // rest countdown lives only in the floating dialog per the simplified
+    // surface contract.
     final pillBg = timing.inRestPeriod ? t.steel : t.accent;
     final pillFg = timing.inRestPeriod ? t.bg : t.accentInk;
-    final secondaryLabel = timing.inRestPeriod
-        ? 'rest'
-        : (active.block.pomodoroEnabled ? 'to rest' : 'to log');
+    final secondaryLabel = timing.inRestPeriod ? 'rest' : 'to log';
     return Material(
       color: Colors.transparent,
       child: InkWell(
@@ -278,7 +284,7 @@ class _Header extends StatelessWidget {
                             )),
                         const SizedBox(width: Sp.m),
                         Text(
-                          _ms(timing.toNextSignal),
+                          _ms(timing.toNextLog),
                           style: AppText.mono.copyWith(
                             color: pillFg,
                             fontSize: 14,
@@ -368,33 +374,20 @@ class _FloatingTimerDialogState extends State<_FloatingTimerDialog> {
               return const SizedBox.shrink();
             }
             final size = settings.blockSizeMinutes;
+            final pomodoroOn = settings.pomodoroEnabled;
             final timing = computeBlockTiming(
               active,
               _now,
               blockSizeMinutes: size,
+              pomodoroEnabled: pomodoroOn,
+              pomodoroPercent: settings.pomodoroPercent,
             );
-            final block = active.block;
-            // Rest-minutes copy in the pomodoro row mirrors the same
-            // "from-toggle" reference so users see realistic numbers when
-            // they enable pomodoro mid-flight.
-            final toggledAt = _pomodoroToggleTimes[block.id];
-            final ref = (toggledAt != null && toggledAt.isAfter(active.startAt))
-                ? toggledAt
-                : active.startAt;
-            final restMinutes =
-                ((active.endAt.difference(ref).inMinutes) *
-                        block.pomodoroPercent /
-                        100)
-                    .round();
             final logLabel = size == 60
                 ? 'Log this hour'
                 : (size == 30 ? 'Log this 30 min' : 'Log this 15 min');
-            final restLabel = size == 60
+            final logCardLabel = size == 60
                 ? 'NEXT LOG (HOURLY)'
                 : (size == 30 ? 'NEXT LOG (30 MIN)' : 'NEXT LOG (15 MIN)');
-            final secondaryLabel = timing.inRestPeriod
-                ? 'REST PERIOD'
-                : (block.pomodoroEnabled ? 'REST IN' : restLabel);
             return Padding(
               padding: const EdgeInsets.fromLTRB(Sp.lg, Sp.lg, Sp.lg, Sp.lg),
               child: Column(
@@ -428,32 +421,34 @@ class _FloatingTimerDialogState extends State<_FloatingTimerDialog> {
                     ),
                   ),
                   const SizedBox(height: Sp.lg),
+                  // Timer 1: time left in this session.
                   _BigTimerBlock(
-                    label: 'TIME LEFT IN BLOCK',
+                    label: 'TIME LEFT IN SESSION',
                     value: _hms(timing.totalRemaining),
                     emphasized: true,
                     restMode: timing.inRestPeriod,
                   ),
                   const SizedBox(height: Sp.md),
+                  // Timer 2: time left to next accountability log.
                   _BigTimerBlock(
-                    label: secondaryLabel,
-                    value: _ms(timing.toNextSignal),
+                    label: logCardLabel,
+                    value: _ms(timing.toNextLog),
                     emphasized: false,
                     restMode: timing.inRestPeriod,
                   ),
-                  const SizedBox(height: Sp.md),
-                  _PomodoroRow(
-                    block: block,
-                    restMinutes: restMinutes,
-                    onToggle: (v) async {
-                      // Track the toggle moment so rest is sized from the
-                      // remaining time, not the full block.
-                      notePomodoroToggle(block.id, v, DateTime.now());
-                      final svc = AppServices.of(context);
-                      await svc.subjects.updateBlock(
-                          block.copyWith(pomodoroEnabled: v));
-                    },
-                  ),
+                  // Timer 3 (pomodoro only): time left to next rest, OR a
+                  // "REST PERIOD" banner during the rest window.
+                  if (pomodoroOn) ...[
+                    const SizedBox(height: Sp.md),
+                    _BigTimerBlock(
+                      label: timing.inRestPeriod ? 'REST PERIOD' : 'NEXT REST IN',
+                      value: timing.inRestPeriod
+                          ? _hms(timing.totalRemaining)
+                          : _ms(timing.toNextRest ?? timing.totalRemaining),
+                      emphasized: false,
+                      restMode: timing.inRestPeriod,
+                    ),
+                  ],
                   const SizedBox(height: Sp.lg),
                   Row(
                     children: [
@@ -536,55 +531,3 @@ class _BigTimerBlock extends StatelessWidget {
   }
 }
 
-/// Per-block pomodoro switch shown inside the floating dialog. Toggling
-/// updates the block via [SubjectsRepository.updateBlock] which cascades into
-/// the schedule rebuild and notification reschedule via the wired listeners.
-class _PomodoroRow extends StatelessWidget {
-  final SubjectBlock block;
-  final int restMinutes;
-  final ValueChanged<bool> onToggle;
-  const _PomodoroRow({
-    required this.block,
-    required this.restMinutes,
-    required this.onToggle,
-  });
-
-  @override
-  Widget build(BuildContext context) {
-    final t = context.tokens;
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: Sp.md, vertical: Sp.s),
-      decoration: BoxDecoration(
-        color: t.surfaceAlt,
-        borderRadius: BorderRadius.circular(R.s),
-        border: Border.all(color: t.divider),
-      ),
-      child: Row(
-        children: [
-          Icon(LucideIcons.coffee, color: t.ink, size: IconSize.m),
-          const SizedBox(width: Sp.m),
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                Text('Pomodoro',
-                    style: AppText.bodyStrong.copyWith(color: t.ink)),
-                Text(
-                  block.pomodoroEnabled
-                      ? 'Last $restMinutes min of this block is rest (${block.pomodoroPercent}%).'
-                      : 'No rest. The full block counts as focus.',
-                  style: AppText.label.copyWith(color: t.inkMuted),
-                ),
-              ],
-            ),
-          ),
-          Switch.adaptive(
-            value: block.pomodoroEnabled,
-            onChanged: onToggle,
-          ),
-        ],
-      ),
-    );
-  }
-}

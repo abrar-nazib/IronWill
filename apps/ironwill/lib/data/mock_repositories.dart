@@ -468,6 +468,7 @@ class MockStatsRepository implements StatsRepository {
       hourlyMinutes: hourly,
       unloggedFocusQuarters: 0,
       habitRows: habitRows,
+      subjectRows: const [],
     );
   }
 }

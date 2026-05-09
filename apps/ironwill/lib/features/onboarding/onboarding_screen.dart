@@ -30,6 +30,8 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
   }
 
   Future<void> _finish() async {
+    // Drop focus so the soft keyboard slides down before the route change.
+    FocusScope.of(context).unfocus();
     final svc = AppServices.of(context);
     final s = svc.settings.settings.value;
     final p = svc.profile.profile.value;
@@ -98,6 +100,11 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
   }
 
   void _go(int page) {
+    // Drop focus before sliding pages so the soft keyboard hides instead
+    // of bleeding into the next step (Name → Focus is the worst offender,
+    // because the next page itself has a numeric TextField that the user
+    // is not yet trying to use).
+    FocusScope.of(context).unfocus();
     _page.animateToPage(
       page,
       duration: const Duration(milliseconds: 280),
@@ -405,20 +412,20 @@ class _FirstHabitPage extends StatelessWidget {
             label: const Text('Add a habit'),
           ),
           const SizedBox(height: Sp.md),
-          Expanded(
-            child: ValueListenableBuilder<List<Habit>>(
-              valueListenable: svc.habits.active,
-              builder: (_, habits, __) {
-                if (habits.isEmpty) {
-                  return const SizedBox.shrink();
-                }
-                return ListView.separated(
-                  itemCount: habits.length,
-                  separatorBuilder: (_, __) => const SizedBox(height: Sp.s),
-                  itemBuilder: (_, i) {
-                    final h = habits[i];
-                    return AppCard(
-                      onTap: () => showHabitEditSheet(context, existing: h),
+          // Inline column of cards instead of Expanded(ListView). The
+          // outer page uses SingleChildScrollView + IntrinsicHeight, and
+          // any flex/scroll widget inside that pair fails on Android Skia
+          // (the screen paints black). A non-flex Column inside the
+          // already-scrollable wrapper renders fine.
+          ValueListenableBuilder<List<Habit>>(
+            valueListenable: svc.habits.active,
+            builder: (_, habits, __) {
+              if (habits.isEmpty) return const SizedBox.shrink();
+              return Column(
+                children: [
+                  for (var i = 0; i < habits.length; i++) ...[
+                    AppCard(
+                      onTap: () => showHabitEditSheet(context, existing: habits[i]),
                       padding: const EdgeInsets.all(Sp.m),
                       child: Row(
                         children: [
@@ -430,15 +437,16 @@ class _FirstHabitPage extends StatelessWidget {
                               border: Border.all(color: t.divider),
                             ),
                             alignment: Alignment.center,
-                            child: Icon(h.glyph, color: t.ink, size: IconSize.m),
+                            child: Icon(habits[i].glyph, color: t.ink, size: IconSize.m),
                           ),
                           const SizedBox(width: Sp.m),
                           Expanded(
                             child: Column(
                               crossAxisAlignment: CrossAxisAlignment.start,
                               children: [
-                                Text(h.name, style: AppText.bodyStrong.copyWith(color: t.ink)),
-                                Text(h.cadence.label,
+                                Text(habits[i].name,
+                                    style: AppText.bodyStrong.copyWith(color: t.ink)),
+                                Text(habits[i].cadence.label,
                                     style: AppText.label.copyWith(color: t.inkMuted)),
                               ],
                             ),
@@ -446,12 +454,14 @@ class _FirstHabitPage extends StatelessWidget {
                           Icon(LucideIcons.pencil, color: t.inkMuted, size: IconSize.s),
                         ],
                       ),
-                    );
-                  },
-                );
-              },
-            ),
+                    ),
+                    if (i < habits.length - 1) const SizedBox(height: Sp.s),
+                  ],
+                ],
+              );
+            },
           ),
+          const SizedBox(height: Sp.lg),
           SizedBox(
             width: double.infinity,
             child: ElevatedButton(onPressed: onNext, child: const Text('Continue')),
@@ -497,56 +507,60 @@ class _FirstSessionPage extends StatelessWidget {
             label: const Text('Add focus blocks'),
           ),
           const SizedBox(height: Sp.md),
-          Expanded(
-            child: ValueListenableBuilder<List<Subject>>(
-              valueListenable: svc.subjects.all,
-              builder: (_, subjects, __) {
-                if (subjects.isEmpty) {
-                  return const SizedBox.shrink();
-                }
-                return ListView.separated(
-                  itemCount: subjects.length,
-                  separatorBuilder: (_, __) => const SizedBox(height: Sp.s),
-                  itemBuilder: (_, i) {
-                    final s = subjects[i];
-                    final blockCount = s.blocks.length;
-                    final summary = blockCount == 0
-                        ? 'No blocks scheduled yet'
-                        : '$blockCount block${blockCount == 1 ? '' : 's'} this week';
-                    return AppCard(
-                      onTap: () => showSubjectEditSheet(context, existing: s),
-                      padding: const EdgeInsets.all(Sp.m),
-                      child: Row(
-                        children: [
-                          Container(
-                            width: 36, height: 36,
-                            decoration: BoxDecoration(
-                              color: t.surfaceAlt,
-                              borderRadius: BorderRadius.circular(R.s),
-                              border: Border.all(color: t.divider),
+          // Inline column instead of Expanded(ListView). See _FirstHabitPage
+          // for the full reasoning: the outer SingleChildScrollView +
+          // IntrinsicHeight wrapper cannot host a flex/scroll child on
+          // Android Skia without paint failures.
+          ValueListenableBuilder<List<Subject>>(
+            valueListenable: svc.subjects.all,
+            builder: (_, subjects, __) {
+              if (subjects.isEmpty) return const SizedBox.shrink();
+              return Column(
+                children: [
+                  for (var i = 0; i < subjects.length; i++) ...[
+                    Builder(builder: (_) {
+                      final s = subjects[i];
+                      final blockCount = s.blocks.length;
+                      final summary = blockCount == 0
+                          ? 'No blocks scheduled yet'
+                          : '$blockCount block${blockCount == 1 ? '' : 's'} this week';
+                      return AppCard(
+                        onTap: () => showSubjectEditSheet(context, existing: s),
+                        padding: const EdgeInsets.all(Sp.m),
+                        child: Row(
+                          children: [
+                            Container(
+                              width: 36, height: 36,
+                              decoration: BoxDecoration(
+                                color: t.surfaceAlt,
+                                borderRadius: BorderRadius.circular(R.s),
+                                border: Border.all(color: t.divider),
+                              ),
+                              alignment: Alignment.center,
+                              child: Icon(LucideIcons.target, color: t.ink, size: IconSize.m),
                             ),
-                            alignment: Alignment.center,
-                            child: Icon(LucideIcons.target, color: t.ink, size: IconSize.m),
-                          ),
-                          const SizedBox(width: Sp.m),
-                          Expanded(
-                            child: Column(
-                              crossAxisAlignment: CrossAxisAlignment.start,
-                              children: [
-                                Text(s.name, style: AppText.bodyStrong.copyWith(color: t.ink)),
-                                Text(summary, style: AppText.label.copyWith(color: t.inkMuted)),
-                              ],
+                            const SizedBox(width: Sp.m),
+                            Expanded(
+                              child: Column(
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                children: [
+                                  Text(s.name, style: AppText.bodyStrong.copyWith(color: t.ink)),
+                                  Text(summary, style: AppText.label.copyWith(color: t.inkMuted)),
+                                ],
+                              ),
                             ),
-                          ),
-                          Icon(LucideIcons.pencil, color: t.inkMuted, size: IconSize.s),
-                        ],
-                      ),
-                    );
-                  },
-                );
-              },
-            ),
+                            Icon(LucideIcons.pencil, color: t.inkMuted, size: IconSize.s),
+                          ],
+                        ),
+                      );
+                    }),
+                    if (i < subjects.length - 1) const SizedBox(height: Sp.s),
+                  ],
+                ],
+              );
+            },
           ),
+          const SizedBox(height: Sp.lg),
           SizedBox(
             width: double.infinity,
             child: ElevatedButton(onPressed: onFinish, child: const Text('Finish setup')),

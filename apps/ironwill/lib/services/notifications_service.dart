@@ -229,47 +229,37 @@ class NotificationsService {
     final dayKey = date.day + date.month * 31;
     final alarm = settings.alarm;
 
-    // Per-block pomodoro override the global default. When on, the
-    // accountability prompt fires once at the start of the rest period
-    // instead of one prompt per 15-minute mark.
-    final pomoOn = block.pomodoroEnabled || settings.pomodoroEnabled;
-    final pomoPercent = block.pomodoroEnabled
-        ? block.pomodoroPercent
-        : settings.pomodoroPercent;
+    // Block-size and pomodoro are universal settings. Each focus session
+    // is split into cycles of [blockSizeMinutes].
+    //
+    // Mandatory: at every cycle's END, fire a "log how that cycle went"
+    // notification. Independent of pomodoro.
+    //
+    // Optional: when pomodoro is on, ALSO fire a "rest now" notification
+    // at the cycle's restStart (= cycleEnd - restMinutes). This is purely
+    // informational; the log notification still fires at cycleEnd.
+    //
+    // Two notification ids per cycle when pomodoro is on (log + rest);
+    // one when pomodoro is off (log only).
+    final pomoOn = settings.pomodoroEnabled;
+    final pomoPercent = settings.pomodoroPercent;
+    final blockSize = settings.blockSizeMinutes;
+    final cycleStep = Duration(minutes: blockSize);
 
-    if (pomoOn) {
-      final restMinutes =
-          ((end.difference(start).inMinutes * pomoPercent) / 100).round();
-      if (restMinutes > 0 && restMinutes < end.difference(start).inMinutes) {
-        final restStart = end.subtract(Duration(minutes: restMinutes));
-        if (restStart.isAfter(now)) {
-          await _plugin.zonedSchedule(
-            sessionTickId(subject.id, dayKey, 0),
-            'Rest now  ·  ${subject.name}',
-            'Log the focus block, then $restMinutes min rest.',
-            _local(restStart),
-            _details(
-                channel: _sessionChannel(alarm),
-                channelName: sessionChannelName,
-                alarm: alarm),
-            androidScheduleMode: AndroidScheduleMode.exactAllowWhileIdle,
-            payload: 'session_tick:${subject.id}',
-          );
-        }
-      }
-      return;
-    }
-
-    // Quarter ticks: at start+15, start+30, ..., end. Skip ticks already passed.
-    var tick = start.add(const Duration(minutes: 15));
+    var cycleStart = start;
     int qIndex = 0;
-    while (!tick.isAfter(end)) {
-      if (tick.isAfter(now)) {
+    while (cycleStart.isBefore(end)) {
+      final naiveCycleEnd = cycleStart.add(cycleStep);
+      final cycleEnd = naiveCycleEnd.isAfter(end) ? end : naiveCycleEnd;
+      final cycleDurationMin = cycleEnd.difference(cycleStart).inMinutes;
+
+      // Mandatory log tick at the end of the cycle.
+      if (cycleEnd.isAfter(now)) {
         await _plugin.zonedSchedule(
-          sessionTickId(subject.id, dayKey, qIndex),
-          'Quarter ended  ·  ${subject.name}',
-          'Log how the last 15 minutes went. Tap to open the tracker.',
-          _local(tick),
+          sessionTickId(subject.id, dayKey, qIndex * 2),
+          _cycleTitle(blockSize, subject.name),
+          'Log how the last $cycleDurationMin minutes went. Tap to open the tracker.',
+          _local(cycleEnd),
           _details(
               channel: _sessionChannel(alarm),
               channelName: sessionChannelName,
@@ -278,10 +268,41 @@ class NotificationsService {
           payload: 'session_tick:${subject.id}',
         );
       }
-      tick = tick.add(const Duration(minutes: 15));
+
+      // Optional rest-start tick when pomodoro is on AND the rest slice
+      // is sane for this cycle (non-zero and shorter than the cycle).
+      if (pomoOn) {
+        final restMinutes = (cycleDurationMin * pomoPercent / 100).round();
+        if (restMinutes > 0 && restMinutes < cycleDurationMin) {
+          final restStart =
+              cycleEnd.subtract(Duration(minutes: restMinutes));
+          if (restStart.isAfter(now)) {
+            await _plugin.zonedSchedule(
+              sessionTickId(subject.id, dayKey, qIndex * 2 + 1),
+              'Rest now  ·  ${subject.name}',
+              'Take a $restMinutes min rest. Log will fire when rest ends.',
+              _local(restStart),
+              _details(
+                  channel: _sessionChannel(alarm),
+                  channelName: sessionChannelName,
+                  alarm: alarm),
+              androidScheduleMode: AndroidScheduleMode.exactAllowWhileIdle,
+              payload: 'session_tick:${subject.id}',
+            );
+          }
+        }
+      }
+
+      cycleStart = naiveCycleEnd;
       qIndex++;
     }
   }
+
+  String _cycleTitle(int blockSize, String name) =>
+      (blockSize == 60
+          ? 'Hour ended  ·  '
+          : (blockSize == 30 ? '30 min ended  ·  ' : 'Quarter ended  ·  ')) +
+      name;
 
   NotificationDetails _details({
     required String channel,

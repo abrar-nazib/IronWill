@@ -223,6 +223,7 @@ Future<void> _logCurrentQuarter(BuildContext context) async {
     context,
     current: aggregated,
     quarterIndex: picked,
+    blockSizeMinutes: size,
   );
   if (result == null || !context.mounted) return;
   for (var i = 0; i < stride; i++) {
@@ -592,7 +593,6 @@ class _HabitTodayRow extends StatelessWidget {
 class _TodaysGridCard extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
-    final t = context.tokens;
     final svc = AppServices.of(context);
     return ValueListenableBuilder<DayBlocks>(
       valueListenable: svc.time.today,
@@ -600,11 +600,6 @@ class _TodaysGridCard extends StatelessWidget {
         valueListenable: svc.settings.settings,
         builder: (_, settings, __) {
           final size = settings.blockSizeMinutes;
-          final hint = size == 60
-              ? 'Tap a block on the Time tab to log how that hour went.'
-              : (size == 30
-                  ? 'Tap a block on the Time tab to log how those 30 minutes went.'
-                  : 'Tap a block on the Time tab to log how that 15 minutes went.');
           return AppCard(
             padding: const EdgeInsets.all(Sp.md),
             child: Column(
@@ -618,11 +613,7 @@ class _TodaysGridCard extends StatelessWidget {
                     child: const Text('Open'),
                   ),
                 ),
-                Text(
-                  hint,
-                  style: AppText.body.copyWith(color: t.inkMuted),
-                ),
-                const SizedBox(height: Sp.m),
+                const SizedBox(height: Sp.s),
                 QuarterGrid(
                   quarters: day.quarters,
                   blockSizeMinutes: size,

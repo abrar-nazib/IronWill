@@ -132,6 +132,8 @@ class _StatsScreenState extends State<StatsScreen> {
                       const SizedBox(height: Sp.m),
                       _PerHabitCard(stats: stats),
                       const SizedBox(height: Sp.m),
+                      _PerSubjectCard(stats: stats),
+                      const SizedBox(height: Sp.m),
                       _WeekGridCard(stats: stats),
                     ]),
                   ),
@@ -625,6 +627,133 @@ class _HabitStatRow extends StatelessWidget {
               Text('${row.hitDays}/${row.evaluatedDays} days',
                   style: AppText.label.copyWith(color: t.inkMuted)),
             ],
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+/// Subject-wise focus breakdown. Schedule-based attribution: a logged
+/// quarter is credited to a subject only when it falls inside that
+/// subject's scheduled block on the same weekday. Sorted high-to-low so
+/// the dominant subject is at the top.
+class _PerSubjectCard extends StatelessWidget {
+  final WeeklyStats stats;
+  const _PerSubjectCard({required this.stats});
+
+  @override
+  Widget build(BuildContext context) {
+    final t = context.tokens;
+    if (stats.subjectRows.isEmpty) {
+      return AppCard(
+        padding: const EdgeInsets.all(Sp.md),
+        child: Row(
+          children: [
+            Icon(LucideIcons.target, color: t.inkMuted, size: IconSize.l),
+            const SizedBox(width: Sp.m),
+            Expanded(
+              child: Text(
+                'No scheduled subjects in this period.',
+                style: AppText.body.copyWith(color: t.inkMuted),
+              ),
+            ),
+          ],
+        ),
+      );
+    }
+    final sorted = [...stats.subjectRows]
+      ..sort((a, b) => b.focusedMinutes.compareTo(a.focusedMinutes));
+    final maxFocus = sorted.first.focusedMinutes;
+    return AppCard(
+      padding: const EdgeInsets.all(Sp.md),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          const SectionHeader('Focus by subject, last 7 days'),
+          for (var i = 0; i < sorted.length; i++) ...[
+            if (i > 0) Divider(color: t.divider, height: Sp.m, thickness: 1),
+            _SubjectStatRow(row: sorted[i], maxFocus: maxFocus),
+          ],
+        ],
+      ),
+    );
+  }
+}
+
+class _SubjectStatRow extends StatelessWidget {
+  final SubjectStatsRow row;
+  final int maxFocus;
+  const _SubjectStatRow({required this.row, required this.maxFocus});
+
+  @override
+  Widget build(BuildContext context) {
+    final t = context.tokens;
+    final ratio = (maxFocus == 0 ? 0.0 : row.focusedMinutes / maxFocus)
+        .clamp(0.0, 1.0);
+    final coverage = row.scheduledMinutes == 0
+        ? 0
+        : ((row.loggedQuarters * 15 / row.scheduledMinutes) * 100)
+            .round();
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: Sp.s),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              Container(
+                width: 36,
+                height: 36,
+                decoration: BoxDecoration(
+                  color: t.surfaceAlt,
+                  borderRadius: BorderRadius.circular(R.s),
+                  border: Border.all(color: t.divider),
+                ),
+                alignment: Alignment.center,
+                child: Icon(LucideIcons.target,
+                    color: t.ink, size: IconSize.m),
+              ),
+              const SizedBox(width: Sp.m),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(row.name,
+                        style: AppText.bodyStrong.copyWith(color: t.ink)),
+                    const SizedBox(height: 2),
+                    Text(
+                      '${(row.focusedMinutes / 60).toStringAsFixed(1)}h focused  ·  ${row.scheduledMinutes ~/ 60}h ${row.scheduledMinutes % 60}m scheduled',
+                      style: AppText.label.copyWith(color: t.inkMuted),
+                    ),
+                  ],
+                ),
+              ),
+              const SizedBox(width: Sp.m),
+              Column(
+                crossAxisAlignment: CrossAxisAlignment.end,
+                children: [
+                  Text('${row.avgUtilizationPct ?? 0}%',
+                      style: AppText.mono.copyWith(
+                        color: t.ink,
+                        fontSize: 14,
+                        fontWeight: FontWeight.w800,
+                      )),
+                  Text('$coverage% logged',
+                      style: AppText.label.copyWith(color: t.inkMuted)),
+                ],
+              ),
+            ],
+          ),
+          const SizedBox(height: Sp.s),
+          ClipRRect(
+            borderRadius: BorderRadius.circular(R.xs),
+            child: LinearProgressIndicator(
+              value: ratio,
+              minHeight: 4,
+              backgroundColor: t.surfaceAlt,
+              valueColor: AlwaysStoppedAnimation<Color>(t.accent),
+            ),
           ),
         ],
       ),

@@ -93,6 +93,10 @@ GoRouter buildRouter(AppServices services) {
             path: 'pomodoro',
             builder: (c, s) => const PomodoroSettingsScreen(),
           ),
+          GoRoute(
+            path: 'block-size',
+            builder: (c, s) => const BlockSizeScreen(),
+          ),
         ],
       ),
     ],

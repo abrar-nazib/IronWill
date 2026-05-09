@@ -3,7 +3,8 @@ import 'package:flutter/material.dart';
 import '../../theme/tokens.dart';
 import '../../theme/typography.dart';
 
-/// Decide which quarter the user means when they tap "Log this quarter".
+/// Decide which 15-min quarter the user means when they tap "Log this 15
+/// min" (or "Log this 30 min" / "Log this hour" depending on block size).
 ///
 /// The rule (per spec):
 /// * if we are 5+ minutes into the current quarter, log the current quarter

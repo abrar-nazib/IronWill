@@ -121,6 +121,10 @@ class _SubjectEditSheetState extends State<_SubjectEditSheet> {
       _showError('Give the subject a name.');
       return;
     }
+    // Drop focus so the soft keyboard hides as the sheet pops, instead of
+    // hanging around on the onboarding page underneath and forcing the
+    // user to dismiss it manually.
+    FocusScope.of(context).unfocus();
     for (final b in _blocks) {
       if (_toMin(b.end) <= _toMin(b.start)) {
         _showError('Each block must end after its start time.');
@@ -238,6 +242,7 @@ class _SubjectEditSheetState extends State<_SubjectEditSheet> {
   }
 
   Future<void> _delete() async {
+    FocusScope.of(context).unfocus();
     final svc = AppServices.of(context);
     if (_existingId != null) {
       await svc.subjects.delete(_existingId!);
@@ -283,7 +288,10 @@ class _SubjectEditSheetState extends State<_SubjectEditSheet> {
                   ),
                   IconButton(
                     icon: const Icon(LucideIcons.x),
-                    onPressed: () => Navigator.of(context).pop(),
+                    onPressed: () {
+                      FocusScope.of(context).unfocus();
+                      Navigator.of(context).pop();
+                    },
                   ),
                 ],
               ),
@@ -656,6 +664,7 @@ class _BlockEditorSheetState extends State<_BlockEditorSheet> {
               pomodoroPercent: _pomodoroPercent,
             ))
         .toList();
+    FocusScope.of(context).unfocus();
     Navigator.of(context).pop(out);
   }
 
@@ -785,45 +794,6 @@ class _BlockEditorSheetState extends State<_BlockEditorSheet> {
                   ),
                 ],
               ),
-              const SizedBox(height: Sp.lg),
-              SwitchListTile.adaptive(
-                contentPadding: EdgeInsets.zero,
-                value: _pomodoroEnabled,
-                onChanged: (v) => setState(() => _pomodoroEnabled = v),
-                title: const Text('Pomodoro rest at the end'),
-                subtitle: Text(
-                  _pomodoroEnabled
-                      ? 'Last $_pomodoroPercent% of the block is rest.'
-                      : 'Off for this block.',
-                  style: AppText.label.copyWith(color: t.inkMuted),
-                ),
-              ),
-              if (_pomodoroEnabled) ...[
-                const SizedBox(height: Sp.s),
-                Row(
-                  children: [
-                    Text('Rest %',
-                        style: AppText.label.copyWith(color: t.inkMuted)),
-                    Expanded(
-                      child: Slider(
-                        min: 5,
-                        max: 50,
-                        divisions: 9,
-                        value: _pomodoroPercent.toDouble(),
-                        label: '$_pomodoroPercent%',
-                        onChanged: (v) =>
-                            setState(() => _pomodoroPercent = v.round()),
-                      ),
-                    ),
-                    SizedBox(
-                      width: 48,
-                      child: Text('$_pomodoroPercent%',
-                          textAlign: TextAlign.right,
-                          style: AppText.bodyStrong.copyWith(color: t.ink)),
-                    ),
-                  ],
-                ),
-              ],
               const SizedBox(height: Sp.x3l),
               SizedBox(
                 width: double.infinity,
@@ -996,6 +966,15 @@ class _ExpiryCalendarSheetState extends State<_ExpiryCalendarSheet> {
                           today: todayDate,
                           selected: _selected,
                           blockCount: widget.blocksByDow[dow] ?? 0,
+                          // Only show coverage badges within the schedule's
+                          // active window (today through the picked expiry).
+                          // Beyond that, the schedule has lapsed so showing
+                          // counts would mislead.
+                          inActiveRange:
+                              !start.add(Duration(days: week * 7 + dow - 1))
+                                      .isBefore(todayDate) &&
+                                  !start.add(Duration(days: week * 7 + dow - 1))
+                                      .isAfter(_selected),
                           onTap: (d) => setState(() => _selected = d),
                         ),
                       ),
@@ -1025,12 +1004,19 @@ class _CalendarCell extends StatelessWidget {
   final DateTime today;
   final DateTime selected;
   final int blockCount;
+
+  /// True when this date is inside the active schedule window: at or after
+  /// today and at or before the picked expiry. Outside that window the
+  /// schedule does not run, so the block-count badge is hidden and the
+  /// cell renders as plain to avoid implying coverage that isn't there.
+  final bool inActiveRange;
   final ValueChanged<DateTime> onTap;
   const _CalendarCell({
     required this.date,
     required this.today,
     required this.selected,
     required this.blockCount,
+    required this.inActiveRange,
     required this.onTap,
   });
 
@@ -1049,7 +1035,11 @@ class _CalendarCell extends StatelessWidget {
         : (isSelected ? t.bg : t.ink);
     final bg = isSelected
         ? t.ink
-        : (isToday ? t.surfaceAlt : Colors.transparent);
+        : (isToday
+            ? t.surfaceAlt
+            : (inActiveRange
+                ? t.accent.withValues(alpha: 0.08)
+                : Colors.transparent));
     return InkWell(
       onTap: isPast ? null : () => onTap(date),
       borderRadius: BorderRadius.circular(R.s),
@@ -1061,7 +1051,9 @@ class _CalendarCell extends StatelessWidget {
             color: bg,
             borderRadius: BorderRadius.circular(R.s),
             border: Border.all(
-              color: isSelected ? t.ink : t.divider,
+              color: isSelected
+                  ? t.ink
+                  : (inActiveRange ? t.accent.withValues(alpha: 0.45) : t.divider),
               width: isSelected ? 1.4 : 1,
             ),
           ),
@@ -1073,7 +1065,7 @@ class _CalendarCell extends StatelessWidget {
                   style: AppText.bodyStrong.copyWith(color: fg, fontSize: 12),
                 ),
               ),
-              if (blockCount > 0 && !isPast)
+              if (blockCount > 0 && !isPast && inActiveRange)
                 Positioned(
                   top: 2,
                   right: 2,

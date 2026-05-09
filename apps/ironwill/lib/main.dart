@@ -40,7 +40,10 @@ void main() async {
       subjects: services.subjects.all.value,
       settings: services.settings.settings.value,
     );
-    await FocusSessionForegroundController.reconcile(services.subjects.all.value);
+    await FocusSessionForegroundController.reconcile(
+      services.subjects.all.value,
+      settings: services.settings.settings.value,
+    );
   }
 
   runApp(LockedInApp(services: services, launchPayload: launchPayload));
@@ -78,6 +81,7 @@ class _LockedInAppState extends State<LockedInApp> with WidgetsBindingObserver {
       _reconcileTicker = Timer.periodic(const Duration(seconds: 30), (_) {
         FocusSessionForegroundController.reconcile(
           widget.services.subjects.all.value,
+          settings: widget.services.settings.settings.value,
         );
       });
     }
@@ -117,7 +121,10 @@ class _LockedInAppState extends State<LockedInApp> with WidgetsBindingObserver {
         subjects: widget.services.subjects.all.value,
         settings: widget.services.settings.settings.value,
       );
-      FocusSessionForegroundController.reconcile(widget.services.subjects.all.value);
+      FocusSessionForegroundController.reconcile(
+        widget.services.subjects.all.value,
+        settings: widget.services.settings.settings.value,
+      );
     }
   }
 

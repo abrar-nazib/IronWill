@@ -61,6 +61,14 @@ class SettingsScreen extends StatelessWidget {
                 onTap: () => context.push('/settings/subjects'),
               ),
               _SimpleRow(
+                icon: LucideIcons.layoutGrid,
+                label: 'Logging block size',
+                trailing: s.blockSizeMinutes == 60
+                    ? '1 hour'
+                    : '${s.blockSizeMinutes} min',
+                onTap: () => context.push('/settings/block-size'),
+              ),
+              _SimpleRow(
                 icon: LucideIcons.timer,
                 label: 'Pomodoro',
                 trailing: s.pomodoroEnabled

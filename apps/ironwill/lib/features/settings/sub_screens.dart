@@ -675,6 +675,111 @@ class PomodoroSettingsScreen extends StatelessWidget {
   }
 }
 
+/// Global block-size picker. The Time tab no longer has its own toggle; this
+/// is the single place to switch between 15 / 30 / 60 minute logging blocks.
+/// Storage stays at 15-minute quarters; this only affects how the grid is
+/// rendered and how often accountability ticks fire.
+class BlockSizeScreen extends StatelessWidget {
+  const BlockSizeScreen({super.key});
+
+  static const List<({int value, String label, String hint})> _options = [
+    (
+      value: 15,
+      label: '15 minutes',
+      hint: 'Most granular. Four cells per hour, four ticks per hour.',
+    ),
+    (
+      value: 30,
+      label: '30 minutes',
+      hint: 'Balanced. Two cells per hour, two ticks per hour.',
+    ),
+    (
+      value: 60,
+      label: '1 hour',
+      hint: 'Lightest cadence. One cell per hour, one tick per hour.',
+    ),
+  ];
+
+  @override
+  Widget build(BuildContext context) {
+    final t = context.tokens;
+    final svc = AppServices.of(context);
+    return Scaffold(
+      backgroundColor: t.bg,
+      appBar: AppBar(title: const Text('Logging block size')),
+      body: ValueListenableBuilder<AppSettings>(
+        valueListenable: svc.settings.settings,
+        builder: (_, s, __) => ListView(
+          padding: const EdgeInsets.fromLTRB(Sp.md, Sp.s, Sp.md, Sp.x4l),
+          children: [
+            Padding(
+              padding: const EdgeInsets.only(bottom: Sp.m),
+              child: Text(
+                'How often the time tracker asks you to log. Same setting drives the grid layout, the accountability ticks, and the floating timer countdown. Storage stays at 15-min sub-blocks so switching back any time is non-destructive.',
+                style: AppText.body.copyWith(color: t.inkMuted),
+              ),
+            ),
+            for (final opt in _options)
+              Padding(
+                padding: const EdgeInsets.only(bottom: Sp.s),
+                child: AppCard(
+                  onTap: () => svc.settings
+                      .update(s.copyWith(blockSizeMinutes: opt.value)),
+                  padding: const EdgeInsets.symmetric(
+                      horizontal: Sp.md, vertical: Sp.m),
+                  child: Row(
+                    children: [
+                      Container(
+                        width: 18,
+                        height: 18,
+                        decoration: BoxDecoration(
+                          shape: BoxShape.circle,
+                          border: Border.all(
+                            color: opt.value == s.blockSizeMinutes
+                                ? t.ink
+                                : t.divider,
+                            width: 2,
+                          ),
+                          color: opt.value == s.blockSizeMinutes
+                              ? t.ink
+                              : Colors.transparent,
+                        ),
+                        child: opt.value == s.blockSizeMinutes
+                            ? Center(
+                                child: Container(
+                                  width: 8,
+                                  height: 8,
+                                  decoration: BoxDecoration(
+                                      color: t.bg, shape: BoxShape.circle),
+                                ),
+                              )
+                            : null,
+                      ),
+                      const SizedBox(width: Sp.m),
+                      Expanded(
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Text(opt.label,
+                                style:
+                                    AppText.bodyStrong.copyWith(color: t.ink)),
+                            Text(opt.hint,
+                                style: AppText.label
+                                    .copyWith(color: t.inkMuted)),
+                          ],
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
 class SubjectsScreen extends StatelessWidget {
   const SubjectsScreen({super.key});
 
