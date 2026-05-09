@@ -56,12 +56,22 @@ class NotificationsService {
   /// Notification id ranges:
   /// - 1000..1999: habit reminders
   /// - 2000..2999: session start (active) markers
-  /// - 3000..9999: session quarter ticks
+  /// - 100000..2^31: session quarter ticks
+  ///
+  /// Quarter-tick ids are hashed from the full tuple `(blockId, day, qIndex)`
+  /// across a ~2.1B bucket space to make collisions effectively impossible.
+  /// The previous 8192-bucket mask collided in practice when the user had
+  /// multiple blocks per day with similar ids (which is common: blocks for
+  /// the same subject have IDs that differ by only a few digits).
   static int habitReminderId(String habitId) => 1000 + (habitId.hashCode & 0x3FF);
   static int sessionActiveId(String sessionId, int day) =>
       2000 + ((sessionId.hashCode + day * 31) & 0x3FF);
-  static int sessionTickId(String sessionId, int day, int qIndex) =>
-      3000 + ((sessionId.hashCode + day * 173 + qIndex * 7) & 0x1FFF);
+  static int sessionTickId(String blockId, int day, int qIndex) {
+    final raw = '$blockId:$day:$qIndex'.hashCode;
+    // Map to positive 100000..2^31 range, well above the habit/session
+    // id namespaces.
+    return 100000 + (raw.abs() % (1 << 30));
+  }
 
   String? _alarmRawResource(AlarmSound s) => switch (s) {
         AlarmSound.softChime => 'soft_chime',
@@ -254,9 +264,16 @@ class NotificationsService {
       final cycleDurationMin = cycleEnd.difference(cycleStart).inMinutes;
 
       // Mandatory log tick at the end of the cycle.
+      //
+      // The notification id has to key on `block.id` (not `subject.id`),
+      // otherwise two blocks of the same subject on the same day, which
+      // both restart `qIndex` at 0, would collide and the later block
+      // would overwrite the earlier one's cycle ticks. That bug
+      // produced "missing notifications for the first N cycles of every
+      // block except the last" before this fix.
       if (cycleEnd.isAfter(now)) {
         await _plugin.zonedSchedule(
-          sessionTickId(subject.id, dayKey, qIndex * 2),
+          sessionTickId(block.id, dayKey, qIndex * 2),
           _cycleTitle(blockSize, subject.name),
           'Log how the last $cycleDurationMin minutes went. Tap to open the tracker.',
           _local(cycleEnd),
@@ -278,7 +295,7 @@ class NotificationsService {
               cycleEnd.subtract(Duration(minutes: restMinutes));
           if (restStart.isAfter(now)) {
             await _plugin.zonedSchedule(
-              sessionTickId(subject.id, dayKey, qIndex * 2 + 1),
+              sessionTickId(block.id, dayKey, qIndex * 2 + 1),
               'Rest now  ·  ${subject.name}',
               'Take a $restMinutes min rest. Log will fire when rest ends.',
               _local(restStart),
