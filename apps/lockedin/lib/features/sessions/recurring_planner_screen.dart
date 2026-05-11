@@ -8,6 +8,7 @@ import '../../services/app_services.dart';
 import '../../theme/tokens.dart';
 import '../../theme/typography.dart';
 import '../../widgets/app_card.dart';
+import '../../widgets/app_error_dialog.dart';
 import '../subjects/subject_edit_sheet.dart';
 
 /// Bulk planner for recurring focus sessions. Lives behind Settings →
@@ -128,18 +129,10 @@ class _RecurringPlannerScreenState extends State<RecurringPlannerScreen> {
         await showTimePicker(context: context, initialTime: _end);
     if (picked == null) return;
     if (_toMin(picked) <= _toMin(_start)) {
-      await showDialog<void>(
-        context: context,
-        builder: (ctx) => AlertDialog(
-          title: const Text('Pick a later end time'),
-          content: const Text('End time must be after start time.'),
-          actions: [
-            TextButton(
-              onPressed: () => Navigator.of(ctx).pop(),
-              child: const Text('OK'),
-            ),
-          ],
-        ),
+      await showAppErrorDialog(
+        context,
+        title: 'Pick a later end time',
+        message: 'The end time must be after the start time.',
       );
       return;
     }

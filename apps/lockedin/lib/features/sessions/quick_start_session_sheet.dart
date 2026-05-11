@@ -6,6 +6,7 @@ import '../../models/models.dart';
 import '../../services/app_services.dart';
 import '../../theme/tokens.dart';
 import '../../theme/typography.dart';
+import '../../widgets/app_error_dialog.dart';
 import '../subjects/subject_edit_sheet.dart';
 
 /// Quick-start sheet. Used wherever the user wants to launch a focus
@@ -91,24 +92,11 @@ class _QuickStartSheetState extends State<_QuickStartSheet> {
 
   DateTime get _endAt => _startAt.add(_duration);
 
-  /// Use a dialog (not a SnackBar) for blocking errors. SnackBars are
-  /// attached to the root ScaffoldMessenger and survive both the sheet
-  /// dismissal AND tab switches, which gave users a stuck banner they
-  /// could only clear by restarting the app.
-  Future<void> _showError(String msg, {String title = 'Cannot save'}) {
-    return showDialog<void>(
-      context: context,
-      builder: (ctx) => AlertDialog(
-        title: Text(title),
-        content: Text(msg),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.of(ctx).pop(),
-            child: const Text('OK'),
-          ),
-        ],
-      ),
-    );
+  /// Branded blocking error dialog. SnackBars used to live here but
+  /// they attach to the root ScaffoldMessenger and leak across tab
+  /// switches; the user had to restart the app to clear them.
+  Future<void> _showError(String msg, {String title = 'Cannot start session'}) {
+    return showAppErrorDialog(context, title: title, message: msg);
   }
 
   Future<void> _pickStart() async {

@@ -6,6 +6,7 @@ import '../../models/models.dart';
 import '../../services/app_services.dart';
 import '../../theme/tokens.dart';
 import '../../theme/typography.dart';
+import '../../widgets/app_error_dialog.dart';
 
 /// Bottom-sheet editor for a [Subject]. Subjects are just labels. The
 /// sheet is intentionally one field (plus delete when editing) so it
@@ -49,21 +50,13 @@ class _SubjectEditSheetState extends State<_SubjectEditSheet> {
     super.dispose();
   }
 
-  /// Modal error dialog. Avoids the SnackBar-survives-tab-switch
-  /// problem that bit the session sheets earlier.
+  /// Branded blocking error dialog. Same component as the session
+  /// sheets so all "cannot save" surfaces feel like one app.
   Future<void> _showError(String msg) {
-    return showDialog<void>(
-      context: context,
-      builder: (ctx) => AlertDialog(
-        title: const Text('Cannot save'),
-        content: Text(msg),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.of(ctx).pop(),
-            child: const Text('OK'),
-          ),
-        ],
-      ),
+    return showAppErrorDialog(
+      context,
+      title: 'Cannot save subject',
+      message: msg,
     );
   }
 

@@ -7,6 +7,7 @@ import '../../models/models.dart';
 import '../../services/app_services.dart';
 import '../../theme/tokens.dart';
 import '../../theme/typography.dart';
+import '../../widgets/app_error_dialog.dart';
 import '../subjects/subject_edit_sheet.dart';
 
 /// Editor for an EXISTING focus session. The user reaches it by tapping
@@ -48,23 +49,11 @@ class _EditSheetState extends State<_EditSheet> {
     _subjectId = widget.existing.subjectId;
   }
 
-  /// Modal error dialog. Replaces an earlier SnackBar implementation
-  /// that leaked across tabs/routes and could only be cleared with an
-  /// app restart, since SnackBars attach to the root ScaffoldMessenger.
-  Future<void> _showError(String msg, {String title = 'Cannot save'}) {
-    return showDialog<void>(
-      context: context,
-      builder: (ctx) => AlertDialog(
-        title: Text(title),
-        content: Text(msg),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.of(ctx).pop(),
-            child: const Text('OK'),
-          ),
-        ],
-      ),
-    );
+  /// Branded blocking error dialog. SnackBars used to live here but
+  /// they attach to the root ScaffoldMessenger and leak across tab
+  /// switches; the user had to restart the app to clear them.
+  Future<void> _showError(String msg, {String title = 'Cannot save session'}) {
+    return showAppErrorDialog(context, title: title, message: msg);
   }
 
   Future<DateTime?> _pickDateTime({
