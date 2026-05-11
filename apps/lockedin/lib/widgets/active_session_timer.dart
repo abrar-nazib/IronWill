@@ -441,14 +441,18 @@ class _FloatingTimerDialogState extends State<_FloatingTimerDialog> {
                     emphasized: false,
                     restMode: timing.inRestPeriod,
                   ),
-                  // Timer 3 (pomodoro only): time left to next rest, OR a
-                  // "REST PERIOD" banner during the rest window.
+                  // Timer 3 (pomodoro only): time left to next rest, OR
+                  // time left in the current rest window. Rest ends when
+                  // the cycle's log tick fires, so during rest the
+                  // remaining time IS `toNextLog`, NOT the whole-session
+                  // remaining `totalRemaining` (which the user reported
+                  // as "rest timer pulling session-timer numbers").
                   if (pomodoroOn) ...[
                     const SizedBox(height: Sp.md),
                     _BigTimerBlock(
-                      label: timing.inRestPeriod ? 'REST PERIOD' : 'NEXT REST IN',
+                      label: timing.inRestPeriod ? 'REST ENDS IN' : 'NEXT REST IN',
                       value: timing.inRestPeriod
-                          ? _hms(timing.totalRemaining)
+                          ? _ms(timing.toNextLog)
                           : _ms(timing.toNextRest ?? timing.totalRemaining),
                       emphasized: false,
                       restMode: timing.inRestPeriod,

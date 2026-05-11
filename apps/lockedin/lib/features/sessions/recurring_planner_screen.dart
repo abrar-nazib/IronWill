@@ -53,8 +53,10 @@ class _RecurringPlannerScreenState extends State<RecurringPlannerScreen> {
   void initState() {
     super.initState();
     final today = DateTime.now();
+    // Default to a single week (today + 6 days). Most users want to try
+    // one week first and extend; opening on a month was too aggressive.
     _until = DateTime(today.year, today.month, today.day)
-        .add(const Duration(days: 27));
+        .add(const Duration(days: 6));
   }
 
   @override
@@ -155,8 +157,13 @@ class _RecurringPlannerScreenState extends State<RecurringPlannerScreen> {
   }
 
   void _bumpUntil(Duration d) {
+    final now = DateTime.now();
+    final today = DateTime(now.year, now.month, now.day);
     setState(() {
-      _until = _until.add(d);
+      final candidate = _until.add(d);
+      // Floor at today so the -1 week chip can't yank the planner into
+      // the past and silently zero out the preview.
+      _until = candidate.isBefore(today) ? today : candidate;
       _rebuildPreview();
     });
   }
@@ -448,8 +455,8 @@ class _RecurringPlannerScreenState extends State<RecurringPlannerScreen> {
                     Expanded(
                       child: OutlinedButton.icon(
                         onPressed: () =>
-                            _bumpUntil(const Duration(days: 7)),
-                        icon: const Icon(LucideIcons.plus, size: 14),
+                            _bumpUntil(const Duration(days: -7)),
+                        icon: const Icon(LucideIcons.minus, size: 14),
                         label: const Text('1 week'),
                       ),
                     ),
@@ -457,18 +464,9 @@ class _RecurringPlannerScreenState extends State<RecurringPlannerScreen> {
                     Expanded(
                       child: OutlinedButton.icon(
                         onPressed: () =>
-                            _bumpUntil(const Duration(days: 30)),
+                            _bumpUntil(const Duration(days: 7)),
                         icon: const Icon(LucideIcons.plus, size: 14),
-                        label: const Text('1 month'),
-                      ),
-                    ),
-                    const SizedBox(width: Sp.s),
-                    Expanded(
-                      child: OutlinedButton.icon(
-                        onPressed: () =>
-                            _bumpUntil(const Duration(days: 90)),
-                        icon: const Icon(LucideIcons.plus, size: 14),
-                        label: const Text('1 quarter'),
+                        label: const Text('1 week'),
                       ),
                     ),
                   ],
