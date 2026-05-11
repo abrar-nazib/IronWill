@@ -48,11 +48,23 @@ class _EditSheetState extends State<_EditSheet> {
     _subjectId = widget.existing.subjectId;
   }
 
-  void _showError(String msg) {
-    ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-      content: Text(msg),
-      duration: const Duration(seconds: 4),
-    ));
+  /// Modal error dialog. Replaces an earlier SnackBar implementation
+  /// that leaked across tabs/routes and could only be cleared with an
+  /// app restart, since SnackBars attach to the root ScaffoldMessenger.
+  Future<void> _showError(String msg, {String title = 'Cannot save'}) {
+    return showDialog<void>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: Text(title),
+        content: Text(msg),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(ctx).pop(),
+            child: const Text('OK'),
+          ),
+        ],
+      ),
+    );
   }
 
   Future<DateTime?> _pickDateTime({

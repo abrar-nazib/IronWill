@@ -49,11 +49,22 @@ class _SubjectEditSheetState extends State<_SubjectEditSheet> {
     super.dispose();
   }
 
-  void _showError(String msg) {
-    ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-      content: Text(msg),
-      duration: const Duration(seconds: 3),
-    ));
+  /// Modal error dialog. Avoids the SnackBar-survives-tab-switch
+  /// problem that bit the session sheets earlier.
+  Future<void> _showError(String msg) {
+    return showDialog<void>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Cannot save'),
+        content: Text(msg),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(ctx).pop(),
+            child: const Text('OK'),
+          ),
+        ],
+      ),
+    );
   }
 
   Future<void> _save() async {

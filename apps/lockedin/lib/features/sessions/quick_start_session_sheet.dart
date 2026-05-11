@@ -91,11 +91,24 @@ class _QuickStartSheetState extends State<_QuickStartSheet> {
 
   DateTime get _endAt => _startAt.add(_duration);
 
-  void _showError(String msg) {
-    ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-      content: Text(msg),
-      duration: const Duration(seconds: 4),
-    ));
+  /// Use a dialog (not a SnackBar) for blocking errors. SnackBars are
+  /// attached to the root ScaffoldMessenger and survive both the sheet
+  /// dismissal AND tab switches, which gave users a stuck banner they
+  /// could only clear by restarting the app.
+  Future<void> _showError(String msg, {String title = 'Cannot save'}) {
+    return showDialog<void>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: Text(title),
+        content: Text(msg),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(ctx).pop(),
+            child: const Text('OK'),
+          ),
+        ],
+      ),
+    );
   }
 
   Future<void> _pickStart() async {

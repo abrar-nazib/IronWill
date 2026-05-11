@@ -128,10 +128,19 @@ class _RecurringPlannerScreenState extends State<RecurringPlannerScreen> {
         await showTimePicker(context: context, initialTime: _end);
     if (picked == null) return;
     if (_toMin(picked) <= _toMin(_start)) {
-      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
-        content: Text('End time must be after start time.'),
-        duration: Duration(seconds: 3),
-      ));
+      await showDialog<void>(
+        context: context,
+        builder: (ctx) => AlertDialog(
+          title: const Text('Pick a later end time'),
+          content: const Text('End time must be after start time.'),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.of(ctx).pop(),
+              child: const Text('OK'),
+            ),
+          ],
+        ),
+      );
       return;
     }
     setState(() {
