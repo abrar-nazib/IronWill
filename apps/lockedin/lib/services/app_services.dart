@@ -60,26 +60,14 @@ class AppServices {
   /// (the user navigated to yesterday, switched tabs, came back, then
   /// tapped a block expecting yesterday but the State had reset).
   ///
-  /// Reset to today on app launch and on date rollover; the tracker
-  /// screen can call [resetTrackerDateToTodayIfStale] to bump it
-  /// forward when the user re-enters after midnight.
+  /// Initialised to today exactly once when AppServices is built. We
+  /// deliberately do NOT auto-snap to today on every rebuild: the
+  /// modal log sheet triggers didChangeDependencies, which would
+  /// otherwise flip the date out from under an in-flight log call
+  /// and silently route past-day writes into today. The "BACK TO
+  /// TODAY" pill in the tracker AppBar is the user-facing escape.
   final ValueNotifier<DateTime> trackerDate =
       ValueNotifier<DateTime>(_todayMidnight());
-
-  /// If `trackerDate.value` is from a previous calendar day, snap it
-  /// forward to today. Called from the tracker screen on entry so a
-  /// crossed-midnight visit doesn't show a stale yesterday.
-  void resetTrackerDateToTodayIfStale() {
-    final today = _todayMidnight();
-    final current = trackerDate.value;
-    if (current.year != today.year ||
-        current.month != today.month ||
-        current.day != today.day) {
-      if (current.isBefore(today)) {
-        trackerDate.value = today;
-      }
-    }
-  }
 
   static DateTime _todayMidnight() {
     final now = DateTime.now();

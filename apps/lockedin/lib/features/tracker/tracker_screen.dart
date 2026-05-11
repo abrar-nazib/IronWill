@@ -40,10 +40,13 @@ class _TrackerScreenState extends State<TrackerScreen> {
   void didChangeDependencies() {
     super.didChangeDependencies();
     final svc = AppServices.of(context);
-    // If the user crossed midnight since they last saw this screen,
-    // snap forward to today. Otherwise honour whatever date they had
-    // last navigated to via the chevrons (survives tab switches).
-    svc.resetTrackerDateToTodayIfStale();
+    // Honour whatever date the user last navigated to via the chevrons
+    // (the notifier survives tab switches). Never auto-snap to today
+    // from here: opening the log bottom sheet triggers another
+    // didChangeDependencies tick, and that flipped trackerDate out
+    // from under in-flight log writes, sending past-day taps into
+    // today by accident. The user-facing reset is the "BACK TO TODAY"
+    // pill in the AppBar.
     _date = svc.trackerDate.value;
     _dayFuture = svc.time.getDay(_date);
     if (_dateNotifier == null) {
