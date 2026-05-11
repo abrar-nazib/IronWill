@@ -33,20 +33,24 @@ class LogBlockResult {
   });
 }
 
-/// Render the "how focused were you?" sheet. [candidateSubjects] is the
-/// list of subjects to offer in the picker; when [autoPickedSubjectId]
-/// is non-null it pre-selects that subject (typically inferred from a
-/// focus session overlapping this block). Pass [askWhichSession] = true
-/// to highlight that multiple sessions overlap so the user picks
-/// deliberately.
+/// Render the "how focused were you?" sheet. [candidateSubjects] is
+/// the list of subjects to offer in the picker. [defaultSubjectId] is
+/// the chip that should be pre-selected on open. A `null` value is a
+/// real answer ("No subject" chip is selected). Callers compute this
+/// by preferring, in order:
+///   1. the user's last-picked subject from this app session (including
+///      a previous "No subject"),
+///   2. the block's existing subject_id (if it was logged before),
+///   3. the subject of a focus session overlapping the block.
+/// Pass [askWhichSession] = true to highlight that multiple sessions
+/// overlap so the user picks deliberately.
 Future<LogBlockResult?> showLogBlockSheet(
   BuildContext context, {
   required Utilization current,
   required int quarterIndex,
   int blockSizeMinutes = 15,
   List<Subject> candidateSubjects = const [],
-  String? currentSubjectId,
-  String? autoPickedSubjectId,
+  String? defaultSubjectId,
   bool askWhichSession = false,
 }) {
   return showModalBottomSheet<LogBlockResult>(
@@ -58,7 +62,7 @@ Future<LogBlockResult?> showLogBlockSheet(
       quarterIndex: quarterIndex,
       blockSizeMinutes: blockSizeMinutes,
       candidateSubjects: candidateSubjects,
-      initialSubjectId: autoPickedSubjectId ?? currentSubjectId,
+      initialSubjectId: defaultSubjectId,
       askWhichSession: askWhichSession,
     ),
   );

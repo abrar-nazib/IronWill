@@ -4,6 +4,7 @@ import 'package:intl/intl.dart';
 import 'package:lucide_icons_flutter/lucide_icons.dart';
 
 import '../../models/models.dart';
+import '../../models/utilization.dart';
 import '../../services/app_services.dart';
 import '../../theme/tokens.dart';
 import '../../theme/typography.dart';
@@ -22,16 +23,52 @@ class TrackerScreen extends StatefulWidget {
 }
 
 class _TrackerScreenState extends State<TrackerScreen> {
+  /// Cached copy of `AppServices.trackerDate` so we have a snapshot to
+  /// reason about during async log calls. The notifier is the source of
+  /// truth; we mirror its value here and listen for external changes.
   late DateTime _date;
   late Future<DayBlocks> _dayFuture;
   bool _consumedLogIntent = false;
 
+  /// Captured at first didChangeDependencies so dispose() can remove
+  /// the listener without calling AppServices.of(context) (which would
+  /// throw in dispose because the widget is no longer in the tree).
+  ValueNotifier<DateTime>? _dateNotifier;
+  VoidCallback? _dateListener;
+
   @override
   void didChangeDependencies() {
     super.didChangeDependencies();
-    _date = AppServices.of(context).time.today.value.date;
-    _dayFuture = AppServices.of(context).time.getDay(_date);
+    final svc = AppServices.of(context);
+    // If the user crossed midnight since they last saw this screen,
+    // snap forward to today. Otherwise honour whatever date they had
+    // last navigated to via the chevrons (survives tab switches).
+    svc.resetTrackerDateToTodayIfStale();
+    _date = svc.trackerDate.value;
+    _dayFuture = svc.time.getDay(_date);
+    if (_dateNotifier == null) {
+      _dateNotifier = svc.trackerDate;
+      _dateListener = () {
+        if (!mounted) return;
+        final next = _dateNotifier!.value;
+        if (next != _date) {
+          setState(() {
+            _date = next;
+            _dayFuture = svc.time.getDay(next);
+          });
+        }
+      };
+      _dateNotifier!.addListener(_dateListener!);
+    }
     _maybeConsumeLogIntent();
+  }
+
+  @override
+  void dispose() {
+    if (_dateNotifier != null && _dateListener != null) {
+      _dateNotifier!.removeListener(_dateListener!);
+    }
+    super.dispose();
   }
 
   /// If the screen was navigated to with `?log=now` (from a 15-min tick
@@ -39,6 +76,12 @@ class _TrackerScreenState extends State<TrackerScreen> {
   /// open the smart quarter picker then the log sheet exactly once and clean
   /// the URL afterwards. The flag resets the moment the URL no longer carries
   /// `log=now`, so subsequent triggers on this same screen instance work too.
+  ///
+  /// Notification-driven logs always target today, even if the user had
+  /// the tracker stuck on an older day: a session-tick fires for the
+  /// session that's running right now, and writing it into a viewed
+  /// past day would be wrong. So we snap to today before running the
+  /// picker, then restore the previous date afterwards.
   void _maybeConsumeLogIntent() {
     final state = GoRouterState.of(context);
     final wantLog = state.uri.queryParameters['log'] == 'now';
@@ -50,7 +93,14 @@ class _TrackerScreenState extends State<TrackerScreen> {
     _consumedLogIntent = true;
     WidgetsBinding.instance.addPostFrameCallback((_) async {
       if (!mounted) return;
-      final size = AppServices.of(context).settings.settings.value.blockSizeMinutes;
+      final svc = AppServices.of(context);
+      final previousDate = svc.trackerDate.value;
+      final today = DateTime.now();
+      final todayDate = DateTime(today.year, today.month, today.day);
+      if (previousDate != todayDate) {
+        svc.trackerDate.value = todayDate;
+      }
+      final size = svc.settings.settings.value.blockSizeMinutes;
       final picked = await SmartQuarterPicker(blockSizeMinutes: size).pick(context);
       if (!mounted) return;
       if (picked != null) {
@@ -64,9 +114,11 @@ class _TrackerScreenState extends State<TrackerScreen> {
   }
 
   void _setDate(DateTime d) {
+    final svc = AppServices.of(context);
+    svc.trackerDate.value = d;
     setState(() {
       _date = d;
-      _dayFuture = AppServices.of(context).time.getDay(d);
+      _dayFuture = svc.time.getDay(d);
     });
   }
 
@@ -93,8 +145,50 @@ class _TrackerScreenState extends State<TrackerScreen> {
                     child: Column(
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
-                        Text('TIME TRACKER',
-                            style: Theme.of(context).textTheme.labelSmall?.copyWith(color: t.inkMuted)),
+                        Builder(
+                          builder: (_) {
+                            final now = DateTime.now();
+                            final todayDate = DateTime(now.year, now.month, now.day);
+                            final isToday = _date == todayDate;
+                            return Row(
+                              children: [
+                                Text(
+                                  isToday ? 'TODAY' : 'VIEWING',
+                                  style: Theme.of(context).textTheme.labelSmall?.copyWith(
+                                        color: isToday ? t.inkMuted : t.accent,
+                                        fontWeight: FontWeight.w800,
+                                        letterSpacing: 1.4,
+                                      ),
+                                ),
+                                if (!isToday) ...[
+                                  const SizedBox(width: Sp.s),
+                                  InkWell(
+                                    onTap: () => _setDate(todayDate),
+                                    borderRadius: BorderRadius.circular(R.pill),
+                                    child: Container(
+                                      padding: const EdgeInsets.symmetric(
+                                          horizontal: Sp.s, vertical: 2),
+                                      decoration: BoxDecoration(
+                                        color: t.accent,
+                                        borderRadius:
+                                            BorderRadius.circular(R.pill),
+                                      ),
+                                      child: Text(
+                                        'BACK TO TODAY',
+                                        style: AppText.label.copyWith(
+                                          color: t.accentInk,
+                                          fontSize: 10,
+                                          fontWeight: FontWeight.w800,
+                                          letterSpacing: 1.2,
+                                        ),
+                                      ),
+                                    ),
+                                  ),
+                                ],
+                              ],
+                            );
+                          },
+                        ),
                         const SizedBox(height: Sp.xs),
                         Text(
                           DateFormat('EEEE, d MMM').format(_date),
@@ -195,17 +289,10 @@ class _TrackerScreenState extends State<TrackerScreen> {
       firstQuarterIndex: firstIndex,
       stride: stride,
     );
-    // Inherit any existing subject_id from the first sub-quarter of the
-    // block so re-logging the same block defaults to the same subject.
-    String? existingSubjectId;
-    if (day.subjectIds.length == day.quarters.length &&
-        firstIndex < day.subjectIds.length) {
-      existingSubjectId = day.subjectIds[firstIndex];
-    }
     // Subject inference: any focus session that overlaps the block's
     // wall-clock window contributes a candidate subject. If exactly one
-    // session matches, we pre-pick its subject. If multiple match, we
-    // surface them all and ask the user to pick.
+    // session matches, we surface it for the inference fallback. If
+    // multiple match, we surface them all and flag "askWhich".
     final blockStart = DateTime(
         _date.year, _date.month, _date.day, 0, 0, 0)
         .add(Duration(minutes: firstIndex * 15));
@@ -215,7 +302,6 @@ class _TrackerScreenState extends State<TrackerScreen> {
     final subjectsById = {for (final s in subjectsAll) s.id: s};
     final candidates = <Subject>[];
     final seen = <String>{};
-    String? autoPicked;
     var distinctSubjects = 0;
     for (final s in overlapping) {
       if (s.subjectId == null) continue;
@@ -227,11 +313,29 @@ class _TrackerScreenState extends State<TrackerScreen> {
         }
       }
     }
-    // Fall back: when no session overlaps, still let the user pick any
-    // subject. Empty list means "subject picker hidden" inside the sheet.
     if (candidates.isEmpty) candidates.addAll(subjectsAll);
-    if (distinctSubjects == 1) autoPicked = candidates.first.id;
     final askWhich = distinctSubjects > 1;
+
+    // Resolve default subject precedence:
+    //   1. Last picked in this session (including explicit "No subject")
+    //      so repeat-logging stays sticky for the user.
+    //   2. The block's existing subject_id (only when this block was
+    //      already logged once).
+    //   3. The subject of a single overlapping focus session.
+    //   4. Otherwise null ("No subject" chip pre-selected).
+    String? defaultSubject;
+    final lastPicked = svc.lastPickedLogSubject.value;
+    final wasLoggedBefore = firstIndex < day.quarters.length &&
+        day.quarters[firstIndex] != Utilization.none;
+    if (lastPicked.isSet) {
+      defaultSubject = lastPicked.subjectId;
+    } else if (wasLoggedBefore &&
+        day.subjectIds.length == day.quarters.length &&
+        firstIndex < day.subjectIds.length) {
+      defaultSubject = day.subjectIds[firstIndex];
+    } else if (distinctSubjects == 1) {
+      defaultSubject = candidates.first.id;
+    }
 
     final picked = await showLogBlockSheet(
       context,
@@ -239,8 +343,7 @@ class _TrackerScreenState extends State<TrackerScreen> {
       quarterIndex: firstIndex,
       blockSizeMinutes: blockSize,
       candidateSubjects: candidates,
-      currentSubjectId: existingSubjectId,
-      autoPickedSubjectId: autoPicked,
+      defaultSubjectId: defaultSubject,
       askWhichSession: askWhich,
     );
     if (picked == null) return;
@@ -255,6 +358,10 @@ class _TrackerScreenState extends State<TrackerScreen> {
         clearSubjectId: picked.clearSubjectId,
       );
     }
+    // Remember this pick so the next "Log this block" tap defaults to
+    // the same subject (or explicitly to "No subject" if that was the
+    // user's choice).
+    svc.lastPickedLogSubject.value = LastPickedLog.value(picked.subjectId);
     if (!mounted) return;
     setState(() {
       _dayFuture = svc.time.getDay(_date);

@@ -11,6 +11,26 @@ import '../data/sqlite_repositories.dart';
 import 'focus_session_service.dart';
 import 'notifications_service.dart';
 
+/// Stores the subject the user last applied when logging a time block.
+/// "Last applied" includes an explicit "No subject" pick (i.e. `null`
+/// can be a meaningful value, distinct from "never picked"). The
+/// notifier lives in [AppServices] and survives across logging actions
+/// in the same app session.
+class LastPickedLog {
+  final String? subjectId;
+  final bool isSet;
+  const LastPickedLog._({this.subjectId, this.isSet = false});
+
+  /// Initial state: the user hasn't logged anything yet in this session.
+  /// Call sites fall through to other inference sources (existing block
+  /// tag, overlapping focus session, etc.).
+  const LastPickedLog.empty() : this._();
+
+  /// The user just logged with this subject (which may be null,
+  /// meaning "No subject" was explicitly chosen).
+  const LastPickedLog.value(String? id) : this._(subjectId: id, isSet: true);
+}
+
 /// Service container. Wraps every repository the app needs. Bind it once at
 /// the top of the widget tree via [AppServicesScope] and read it from any
 /// widget via `AppServices.of(context)`.
@@ -25,7 +45,48 @@ class AppServices {
   final BackupService? backup;
   final NotificationsService notifications;
 
-  const AppServices({
+  /// Tracks the user's most recent subject pick when logging a time
+  /// block. Reset between app launches. The log sheet uses this when
+  /// the block has no existing subject tag, so repeated logging in a
+  /// row defaults to the same subject the user chose last time
+  /// (including "No subject").
+  final ValueNotifier<LastPickedLog> lastPickedLogSubject =
+      ValueNotifier<LastPickedLog>(const LastPickedLog.empty());
+
+  /// Which date the Time tab is currently showing. Lifted out of
+  /// [TrackerScreen]'s State so it survives tab switches. Without
+  /// this, every tap on the Time tab from the bottom nav threw the
+  /// user back to today, which mis-routed past-day logs into today
+  /// (the user navigated to yesterday, switched tabs, came back, then
+  /// tapped a block expecting yesterday but the State had reset).
+  ///
+  /// Reset to today on app launch and on date rollover; the tracker
+  /// screen can call [resetTrackerDateToTodayIfStale] to bump it
+  /// forward when the user re-enters after midnight.
+  final ValueNotifier<DateTime> trackerDate =
+      ValueNotifier<DateTime>(_todayMidnight());
+
+  /// If `trackerDate.value` is from a previous calendar day, snap it
+  /// forward to today. Called from the tracker screen on entry so a
+  /// crossed-midnight visit doesn't show a stale yesterday.
+  void resetTrackerDateToTodayIfStale() {
+    final today = _todayMidnight();
+    final current = trackerDate.value;
+    if (current.year != today.year ||
+        current.month != today.month ||
+        current.day != today.day) {
+      if (current.isBefore(today)) {
+        trackerDate.value = today;
+      }
+    }
+  }
+
+  static DateTime _todayMidnight() {
+    final now = DateTime.now();
+    return DateTime(now.year, now.month, now.day);
+  }
+
+  AppServices({
     required this.habits,
     required this.time,
     required this.subjects,

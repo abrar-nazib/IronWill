@@ -220,12 +220,6 @@ Future<void> _logCurrentQuarter(BuildContext context) async {
     firstQuarterIndex: picked,
     stride: stride,
   );
-  // Carry the existing subject_id forward when re-logging.
-  String? existingSubjectId;
-  if (today.subjectIds.length == today.quarters.length &&
-      picked < today.subjectIds.length) {
-    existingSubjectId = today.subjectIds[picked];
-  }
   // Subject inference from any focus session overlapping the chosen
   // block. Same logic as in the tracker tab.
   final blockStart = DateTime(
@@ -237,7 +231,6 @@ Future<void> _logCurrentQuarter(BuildContext context) async {
   final subjectsById = {for (final s in subjectsAll) s.id: s};
   final candidates = <Subject>[];
   final seen = <String>{};
-  String? autoPicked;
   var distinct = 0;
   for (final s in overlapping) {
     if (s.subjectId == null) continue;
@@ -250,16 +243,33 @@ Future<void> _logCurrentQuarter(BuildContext context) async {
     }
   }
   if (candidates.isEmpty) candidates.addAll(subjectsAll);
-  if (distinct == 1) autoPicked = candidates.first.id;
   final askWhich = distinct > 1;
+  // Default subject precedence (same as tracker_screen._logQuarter):
+  //   1. Last picked in this session (includes explicit "No subject")
+  //   2. The block's existing subject_id (when it was logged before)
+  //   3. A single overlapping focus session's subject
+  //   4. null otherwise
+  String? defaultSubject;
+  final lastPicked = svc.lastPickedLogSubject.value;
+  final wasLoggedBefore =
+      picked < today.quarters.length &&
+      today.quarters[picked] != Utilization.none;
+  if (lastPicked.isSet) {
+    defaultSubject = lastPicked.subjectId;
+  } else if (wasLoggedBefore &&
+      today.subjectIds.length == today.quarters.length &&
+      picked < today.subjectIds.length) {
+    defaultSubject = today.subjectIds[picked];
+  } else if (distinct == 1) {
+    defaultSubject = candidates.first.id;
+  }
   final result = await showLogBlockSheet(
     context,
     current: aggregated,
     quarterIndex: picked,
     blockSizeMinutes: size,
     candidateSubjects: candidates,
-    currentSubjectId: existingSubjectId,
-    autoPickedSubjectId: autoPicked,
+    defaultSubjectId: defaultSubject,
     askWhichSession: askWhich,
   );
   if (result == null || !context.mounted) return;
@@ -274,6 +284,9 @@ Future<void> _logCurrentQuarter(BuildContext context) async {
       clearSubjectId: result.clearSubjectId,
     );
   }
+  // Remember the pick (including explicit "No subject") so the next
+  // log on home OR tracker defaults to the same subject.
+  svc.lastPickedLogSubject.value = LastPickedLog.value(result.subjectId);
 }
 
 /// The "you can log here" tray. Most prominent action on the home screen so
