@@ -37,7 +37,7 @@ android {
         }
     }
 
-    // Output APKs as IronWill-<buildType>.apk (e.g. IronWill-release.apk).
+    // Output APKs as LockedIn-<buildType>.apk (e.g. LockedIn-release.apk).
     applicationVariants.all {
         outputs.all {
             val output = this as com.android.build.gradle.internal.api.BaseVariantOutputImpl

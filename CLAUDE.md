@@ -18,7 +18,7 @@ The product is a single Flutter app (Android primary; Linux desktop and Web are 
 ```
 LockedIn/
 ├── apps/
-│   └── ironwill/                 the Flutter app (always run from here)
+│   └── lockedin/                 the Flutter app (always run from here)
 ├── Docs/                      original spec PDFs (do not edit)
 ├── screenshots/               70+ Dribbble references for the design reviewer
 │                              agent (gitignored; populated by the playwright
@@ -53,7 +53,7 @@ export JAVA_HOME=$ANDROID_STUDIO/jbr
 From the repo root:
 
 ```bash
-cd apps/ironwill
+cd apps/lockedin
 flutter pub get
 flutter run -d linux         # fastest dev loop, no Android SDK needed
 flutter run -d chrome        # for sharing screenshots, web preview
@@ -158,10 +158,10 @@ Tabular figures must be enabled (`featureSet: tnum`) wherever numbers stack. Tha
 
 The app is fully offline. No network. Choices that drove the architecture:
 
-* **SQLite via `sqflite` (Android) and `sqflite_common_ffi` (Linux desktop)** for typed, queryable persistence. Schema lives in [lib/data/local_db.dart](apps/ironwill/lib/data/local_db.dart). Current schema version is `6`. Bump when columns or tables change and add an `ALTER` block to `_onUpgrade`. See "Schema history" at the bottom for what each version added.
-* **Repositories** in [lib/data/repositories.dart](apps/ironwill/lib/data/repositories.dart) are interface-driven. Mock impls live in [mock_repositories.dart](apps/ironwill/lib/data/mock_repositories.dart) and SQLite impls in [sqlite_repositories.dart](apps/ironwill/lib/data/sqlite_repositories.dart). The UI imports the abstract interfaces only.
+* **SQLite via `sqflite` (Android) and `sqflite_common_ffi` (Linux desktop)** for typed, queryable persistence. Schema lives in [lib/data/local_db.dart](apps/lockedin/lib/data/local_db.dart). Current schema version is `6`. Bump when columns or tables change and add an `ALTER` block to `_onUpgrade`. See "Schema history" at the bottom for what each version added.
+* **Repositories** in [lib/data/repositories.dart](apps/lockedin/lib/data/repositories.dart) are interface-driven. Mock impls live in [mock_repositories.dart](apps/lockedin/lib/data/mock_repositories.dart) and SQLite impls in [sqlite_repositories.dart](apps/lockedin/lib/data/sqlite_repositories.dart). The UI imports the abstract interfaces only.
 * **Reads through `ValueListenable` streams.** Every list-shaped repository exposes a `ValueNotifier` that the UI binds to via `ValueListenableBuilder`. Writes update the notifier so listeners rebuild without manual `setState` plumbing.
-* **JSON export and import** in [lib/data/backup.dart](apps/ironwill/lib/data/backup.dart). One file, all tables, format string `"lockedin-backup"` plus an integer version. The reader still accepts the legacy `manup-backup` and `ironwill-backup` strings so older exports import cleanly. Import wipes and replaces; we may add a merge-mode later. The export is shared via the system share sheet (`share_plus`); import picks via `file_picker`.
+* **JSON export and import** in [lib/data/backup.dart](apps/lockedin/lib/data/backup.dart). One file, all tables, format string `"lockedin-backup"` plus an integer version. The reader still accepts the legacy `manup-backup` and `ironwill-backup` strings so older exports import cleanly. Import wipes and replaces; we may add a merge-mode later. The export is shared via the system share sheet (`share_plus`); import picks via `file_picker`.
 
 ## Notifications and reminders
 
@@ -170,7 +170,7 @@ This is the gnarly part on Android because of Doze and OEM modifications.
 * **Habit reminders and 15-minute session ticks** are scheduled with `flutter_local_notifications` via `AlarmManager`. We use `AndroidScheduleMode.exactAllowWhileIdle` so Doze cannot defer them. The manifest declares `USE_EXACT_ALARM` and `SCHEDULE_EXACT_ALARM`.
 * **The persistent "session active" notification is a real foreground service**, not an `ongoing: true` regular notification. Regular ongoing notifications get reaped when Android kills the process and respawn each time the app re-evaluates, which produces a flickery, sometimes-audible respawn cycle. The flashlight notification, the music player notification, and similar system-tray-grade widgets are all backed by foreground services, and that is what we use.
   * Plugin: `flutter_foreground_task`.
-  * Controller: [lib/services/focus_session_service.dart](apps/ironwill/lib/services/focus_session_service.dart).
+  * Controller: [lib/services/focus_session_service.dart](apps/lockedin/lib/services/focus_session_service.dart).
   * Manifest: a `<service>` declaration for `com.pravera.flutter_foreground_task.service.ForegroundService` plus `FOREGROUND_SERVICE` and `FOREGROUND_SERVICE_DATA_SYNC` permissions.
   * Lifecycle: `FocusSessionForegroundController.reconcile(sessions)` is called on every app start, on every app resume, and after any habit/session/setting write. It starts the service if a session is currently inside its scheduled window and stops it when no session is live. Idempotent on each call.
 * **Channel ids vary by chosen sound** (`lockedin_session_<sound>`, `lockedin_habit_<sound>`). Android freezes a channel's sound at first post; varying the id lets the user switch sounds without having to clear notification settings. Channels are pre-created at `init()` time so `show()` and `zonedSchedule()` always have a place to land.
@@ -199,7 +199,7 @@ Iterate until the agent's verdict is "ship ready", or the user explicitly accept
 
 ## Schema history
 
-Each version's `_onUpgrade` step is in [lib/data/local_db.dart](apps/ironwill/lib/data/local_db.dart). The fresh-install `_onCreate` reflects the latest version directly.
+Each version's `_onUpgrade` step is in [lib/data/local_db.dart](apps/lockedin/lib/data/local_db.dart). The fresh-install `_onCreate` reflects the latest version directly.
 
 * **v1**: original. `habits`, `habit_logs`, `time_blocks`, `focus_sessions`, `profile`, `settings`.
 * **v2**: `habits.description`, `habit_logs.note`, `settings.theme_mode`, `settings.onboarded`.
@@ -208,11 +208,11 @@ Each version's `_onUpgrade` step is in [lib/data/local_db.dart](apps/ironwill/li
 * **v5**: `habit_logs.metadata` (TEXT JSON, default `{}`) holds per-day values for the structured fields the user defined on the parent habit. Values can be string, int, bool, list of int, list of bool.
 * **v6**: BREAKING. Recurring weekly `subject_blocks` replaced by one-shot `focus_sessions(id, subject_id NULL, start_at ms, end_at ms, created_at ms)`. The frontend fans out "every Mon/Wed 9-10" into N rows. The repo enforces non-overlap on create / update so collisions never reach disk. `time_blocks.subject_id` (nullable, FK ON DELETE SET NULL) tags each logged quarter with the subject it belonged to so stats attribute directly off the column instead of intersecting with the (gone) recurring schedule. Migration fans every `subject_blocks` row out into focus_sessions covering today through the owning subject's `expires_at`, then drops `subject_blocks`.
 
-The backup importer in [lib/data/backup.dart](apps/ironwill/lib/data/backup.dart) is forward-compatible with all four legacy shapes: `manup-backup`/`ironwill-backup` format strings, v1 `focus_sessions` (one row per subject with `days_csv` + start/end hour/minute), v2 `subjects` + `subject_blocks` (recurring weekly), and v3+ modern `focus_sessions` (one-shot windows with `start_at`/`end_at` ms). The first three are fanned out into modern focus_sessions at import time, covering today through each subject's expiry. Single-value `daily_focus_minutes_target` is expanded to 7 weekdays; habit rows without `metadata` get `{}`; time_block rows without `subject_id` get null. So every old export imports cleanly into the new schema.
+The backup importer in [lib/data/backup.dart](apps/lockedin/lib/data/backup.dart) is forward-compatible with all four legacy shapes: `manup-backup`/`ironwill-backup` format strings, v1 `focus_sessions` (one row per subject with `days_csv` + start/end hour/minute), v2 `subjects` + `subject_blocks` (recurring weekly), and v3+ modern `focus_sessions` (one-shot windows with `start_at`/`end_at` ms). The first three are fanned out into modern focus_sessions at import time, covering today through each subject's expiry. Single-value `daily_focus_minutes_target` is expanded to 7 weekdays; habit rows without `metadata` get `{}`; time_block rows without `subject_id` get null. So every old export imports cleanly into the new schema.
 
 ## App branding
 
-LockedIn (formerly ManUp / IronWill). The user-visible label, applicationId, DB filename, notification channel ids, and backup format string are all `lockedin`-prefixed. The folder is still `apps/ironwill/` for build-path stability — that's a paper cut, not a correctness issue. The legacy strings are accepted on import only, never written.
+LockedIn (formerly ManUp / IronWill). The user-visible label, applicationId, DB filename, notification channel ids, backup format string, AND the Flutter project folder are all `lockedin`-prefixed. The legacy `manup-backup` and `ironwill-backup` strings are accepted on import only, never written. The GitHub repo is still `IronWill` for URL stability; rename it via `gh repo rename` if and when SEO matters.
 
 ## Phase progress (LockedIn pivot, started 2026-05-08)
 
