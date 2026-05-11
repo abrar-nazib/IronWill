@@ -10,7 +10,6 @@ dependencies:
   flutter:
     sdk: flutter
   cupertino_icons: ^1.0.8
-  google_fonts: ^6.2.1
   go_router: ^14.6.2
   lucide_icons_flutter: ^3.0.5
   intl: ^0.20.1
@@ -42,3 +41,19 @@ dev_dependencies:
 
 flutter:
   uses-material-design: true
+  fonts:
+    # Variable fonts bundled in-app so the type ramp works on first
+    # launch with zero network access. CLAUDE.md mandates a fully
+    # offline app; google_fonts' default behaviour (download on first
+    # use from fonts.gstatic.com) crashed the release build on devices
+    # without internet. The .ttf files are variable across weight,
+    # so a single asset per family covers every FontWeight we use.
+    - family: Inter
+      fonts:
+        - asset: assets/fonts/Inter.ttf
+    - family: HankenGrotesk
+      fonts:
+        - asset: assets/fonts/HankenGrotesk.ttf
+    - family: JetBrainsMono
+      fonts:
+        - asset: assets/fonts/JetBrainsMono.ttf

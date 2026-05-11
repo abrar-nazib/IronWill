@@ -1,5 +1,4 @@
 import 'package:flutter/material.dart';
-import 'package:google_fonts/google_fonts.dart';
 
 /// LockedIn type ramp.
 ///
@@ -10,9 +9,20 @@ import 'package:google_fonts/google_fonts.dart';
 ///   and minute totals feel earned.
 /// * Section labels use **Hanken Grotesk** at small caps with wide tracking,
 ///   to lean editorial without going decorative.
+///
+/// All three families are bundled as variable TTFs in `assets/fonts/` so
+/// the app needs no network at first run. The earlier `google_fonts`
+/// integration fetched fonts from `fonts.gstatic.com` lazily and crashed
+/// the release build on offline devices.
 class AppText {
-  static TextStyle _hanken(double size, FontWeight weight, {double letterSpacing = -0.4, double height = 1.05}) {
-    return GoogleFonts.hankenGrotesk(
+  static const String _hankenFamily = 'HankenGrotesk';
+  static const String _interFamily = 'Inter';
+  static const String _monoFamily = 'JetBrainsMono';
+
+  static TextStyle _hanken(double size, FontWeight weight,
+      {double letterSpacing = -0.4, double height = 1.05}) {
+    return TextStyle(
+      fontFamily: _hankenFamily,
       fontSize: size,
       fontWeight: weight,
       letterSpacing: letterSpacing,
@@ -20,8 +30,10 @@ class AppText {
     );
   }
 
-  static TextStyle _inter(double size, FontWeight weight, {double letterSpacing = -0.05, double height = 1.4}) {
-    return GoogleFonts.inter(
+  static TextStyle _inter(double size, FontWeight weight,
+      {double letterSpacing = -0.05, double height = 1.4}) {
+    return TextStyle(
+      fontFamily: _interFamily,
       fontSize: size,
       fontWeight: weight,
       letterSpacing: letterSpacing,
@@ -29,8 +41,10 @@ class AppText {
     );
   }
 
-  static TextStyle _mono(double size, FontWeight weight, {double letterSpacing = -0.3, double height = 1.0}) {
-    return GoogleFonts.jetBrainsMono(
+  static TextStyle _mono(double size, FontWeight weight,
+      {double letterSpacing = -0.3, double height = 1.0}) {
+    return TextStyle(
+      fontFamily: _monoFamily,
       fontSize: size,
       fontWeight: weight,
       letterSpacing: letterSpacing,
