@@ -8,7 +8,8 @@ import '../../theme/tokens.dart';
 import '../../theme/typography.dart';
 import '../../widgets/app_card.dart';
 import '../habits/habit_edit_sheet.dart';
-import '../sessions/start_session_sheet.dart';
+import '../sessions/edit_session_sheet.dart';
+import '../sessions/quick_start_session_sheet.dart';
 import '../subjects/subject_edit_sheet.dart';
 
 class OnboardingScreen extends StatefulWidget {
@@ -503,15 +504,15 @@ class _FirstSessionPage extends StatelessWidget {
           ),
           const SizedBox(height: Sp.lg),
           OutlinedButton.icon(
-            onPressed: () => showStartFocusSessionSheet(context),
+            onPressed: () => showQuickStartSessionSheet(context),
             icon: const Icon(LucideIcons.plus),
             label: const Text('Start a focus session'),
           ),
           const SizedBox(height: Sp.s),
           OutlinedButton.icon(
             onPressed: () => showSubjectEditSheet(context),
-            icon: const Icon(LucideIcons.bookmark),
-            label: const Text('Just add a subject (no time yet)'),
+            icon: const Icon(LucideIcons.plus),
+            label: const Text('Add a subject'),
           ),
           const SizedBox(height: Sp.md),
           ValueListenableBuilder<List<FocusSession>>(
@@ -572,7 +573,7 @@ class _SessionPreviewCard extends StatelessWidget {
     final timeLabel =
         '${start.hour.toString().padLeft(2, '0')}:${start.minute.toString().padLeft(2, '0')} → ${end.hour.toString().padLeft(2, '0')}:${end.minute.toString().padLeft(2, '0')}';
     return AppCard(
-      onTap: () => showStartFocusSessionSheet(context, existing: session),
+      onTap: () => showEditSessionSheet(context, existing: session),
       padding: const EdgeInsets.all(Sp.m),
       child: Row(
         children: [

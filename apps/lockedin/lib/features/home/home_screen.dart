@@ -14,7 +14,7 @@ import '../../widgets/quarter_grid.dart';
 import '../../widgets/streak_pill.dart';
 import '../habits/habit_edit_sheet.dart';
 import '../habits/habit_log_sheet.dart';
-import '../sessions/start_session_sheet.dart';
+import '../sessions/quick_start_session_sheet.dart';
 import '../tracker/log_block_sheet.dart';
 import '../tracker/quarter_logger.dart';
 
@@ -344,7 +344,7 @@ class _LogTrayCard extends StatelessWidget {
                 child: OutlinedButton.icon(
                   icon: const Icon(LucideIcons.play),
                   label: const Text('Start a focus session'),
-                  onPressed: () => showStartFocusSessionSheet(context),
+                  onPressed: () => showQuickStartSessionSheet(context),
                 ),
               ),
               const SizedBox(width: Sp.s),

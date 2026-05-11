@@ -1,5 +1,4 @@
 import 'package:flutter/material.dart';
-import 'package:intl/intl.dart';
 import 'package:lucide_icons_flutter/lucide_icons.dart';
 
 import '../../data/local_db.dart';
@@ -8,35 +7,26 @@ import '../../services/app_services.dart';
 import '../../theme/tokens.dart';
 import '../../theme/typography.dart';
 
-/// Bottom-sheet editor for a [Subject]. Subjects in v6 are just labels.
-/// The default sheet shows only the name field (and delete, when
-/// editing). The "soft expiry" advanced chrome (+1 week / -1 week /
-/// pick a date) only appears when [showAdvancedOptions] is true,
-/// reserved for the Settings entry point. Onboarding and inline
-/// "New subject" paths get a one-field form.
-Future<Subject?> showSubjectEditSheet(
-  BuildContext context, {
-  Subject? existing,
-  bool showAdvancedOptions = false,
-}) {
+/// Bottom-sheet editor for a [Subject]. Subjects are just labels. The
+/// sheet is intentionally one field (plus delete when editing) so it
+/// looks the same from onboarding, the inline "+ New subject" chip,
+/// and the Settings → Subjects entry point. Soft expiry survives on
+/// the model only for back-compat; we set it implicitly and never
+/// expose it.
+///
+/// Pass `existing` to edit; omit to create.
+Future<Subject?> showSubjectEditSheet(BuildContext context, {Subject? existing}) {
   return showModalBottomSheet<Subject?>(
     context: context,
     isScrollControlled: true,
     backgroundColor: context.tokens.surface,
-    builder: (ctx) => _SubjectEditSheet(
-      existing: existing,
-      showAdvancedOptions: showAdvancedOptions,
-    ),
+    builder: (ctx) => _SubjectEditSheet(existing: existing),
   );
 }
 
 class _SubjectEditSheet extends StatefulWidget {
   final Subject? existing;
-  final bool showAdvancedOptions;
-  const _SubjectEditSheet({
-    this.existing,
-    required this.showAdvancedOptions,
-  });
+  const _SubjectEditSheet({this.existing});
 
   @override
   State<_SubjectEditSheet> createState() => _SubjectEditSheetState();
@@ -44,17 +34,13 @@ class _SubjectEditSheet extends StatefulWidget {
 
 class _SubjectEditSheetState extends State<_SubjectEditSheet> {
   late final TextEditingController _name;
-  late DateTime _expiresAt;
 
   bool get _isEditing => widget.existing != null;
 
   @override
   void initState() {
     super.initState();
-    final s = widget.existing;
-    _name = TextEditingController(text: s?.name ?? '');
-    _expiresAt = s?.expiresAt ??
-        DateTime.now().add(const Duration(days: LocalDb.defaultExpiryDays));
+    _name = TextEditingController(text: widget.existing?.name ?? '');
   }
 
   @override
@@ -79,45 +65,19 @@ class _SubjectEditSheetState extends State<_SubjectEditSheet> {
     final svc = AppServices.of(context);
     Subject result;
     if (_isEditing) {
-      result = await svc.subjects.update(widget.existing!.copyWith(
-        name: _name.text.trim(),
-        expiresAt: _expiresAt,
-      ));
+      result = await svc.subjects.update(
+        widget.existing!.copyWith(name: _name.text.trim()),
+      );
     } else {
+      // expiresAt is hidden chrome now: we still write a value so older
+      // rows stay valid, but the user never sees or tweaks it.
       result = await svc.subjects.create(SubjectDraft(
         name: _name.text.trim(),
-        expiresAt: _expiresAt,
+        expiresAt: DateTime.now()
+            .add(const Duration(days: LocalDb.defaultExpiryDays)),
       ));
     }
     if (mounted) Navigator.of(context).pop(result);
-  }
-
-  Future<void> _pickExpiresAt() async {
-    final today = DateTime.now();
-    final picked = await showDatePicker(
-      context: context,
-      initialDate: _expiresAt.isBefore(today) ? today : _expiresAt,
-      firstDate: today,
-      lastDate: today.add(const Duration(days: 365)),
-    );
-    if (picked != null) setState(() => _expiresAt = picked);
-  }
-
-  void _repeatNextWeek() {
-    final today = DateTime.now();
-    final base = _expiresAt.isBefore(today) ? today : _expiresAt;
-    setState(() {
-      _expiresAt = base.add(const Duration(days: LocalDb.defaultExpiryDays));
-    });
-  }
-
-  void _shrinkOneWeek() {
-    final today = DateTime.now();
-    final todayDate = DateTime(today.year, today.month, today.day);
-    final candidate = _expiresAt.subtract(const Duration(days: 7));
-    setState(() {
-      _expiresAt = candidate.isBefore(todayDate) ? todayDate : candidate;
-    });
   }
 
   Future<void> _delete() async {
@@ -172,7 +132,7 @@ class _SubjectEditSheetState extends State<_SubjectEditSheet> {
               ),
               const SizedBox(height: Sp.s),
               Text(
-                'Subjects are just labels. Tag focus sessions and logged blocks with them so your time adds up by subject.',
+                "Subjects are labels you tag focus sessions and logged blocks with.",
                 style: AppText.label.copyWith(color: t.inkMuted),
               ),
               const SizedBox(height: Sp.md),
@@ -187,16 +147,8 @@ class _SubjectEditSheetState extends State<_SubjectEditSheet> {
                 autofocus: !_isEditing,
                 style: AppText.body.copyWith(color: t.ink, fontSize: 16),
                 decoration: const InputDecoration(hintText: 'Mathematics'),
+                onSubmitted: (_) => _save(),
               ),
-              if (widget.showAdvancedOptions) ...[
-                const SizedBox(height: Sp.lg),
-                _ExpiresRow(
-                  expiresAt: _expiresAt,
-                  onPick: _pickExpiresAt,
-                  onRepeat: _repeatNextWeek,
-                  onShrink: _shrinkOneWeek,
-                ),
-              ],
               const SizedBox(height: Sp.x3l),
               SizedBox(
                 width: double.infinity,
@@ -219,100 +171,6 @@ class _SubjectEditSheetState extends State<_SubjectEditSheet> {
           ),
         ),
       ),
-    );
-  }
-}
-
-class _ExpiresRow extends StatelessWidget {
-  final DateTime expiresAt;
-  final VoidCallback onPick;
-  final VoidCallback onRepeat;
-  final VoidCallback onShrink;
-  const _ExpiresRow({
-    required this.expiresAt,
-    required this.onPick,
-    required this.onRepeat,
-    required this.onShrink,
-  });
-
-  @override
-  Widget build(BuildContext context) {
-    final t = context.tokens;
-    final today = DateTime.now();
-    final daysLeft = DateTime(expiresAt.year, expiresAt.month, expiresAt.day)
-        .difference(DateTime(today.year, today.month, today.day))
-        .inDays;
-    final dateLabel = DateFormat('EEE, d MMM').format(expiresAt);
-    final hint = daysLeft >= 0
-        ? '$daysLeft day${daysLeft == 1 ? '' : 's'} left'
-        : 'Soft expiry passed ${-daysLeft}d ago';
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        Text('SOFT EXPIRY (advanced)',
-            style: Theme.of(context)
-                .textTheme
-                .labelSmall
-                ?.copyWith(color: t.inkMuted)),
-        const SizedBox(height: Sp.xs),
-        Text(
-          "Just a sort hint on the Subjects screen. Sessions can still run before or after this date.",
-          style: AppText.label.copyWith(color: t.inkMuted, fontSize: 11),
-        ),
-        const SizedBox(height: Sp.s),
-        InkWell(
-          onTap: onPick,
-          borderRadius: BorderRadius.circular(R.s),
-          child: Container(
-            padding: const EdgeInsets.symmetric(
-                horizontal: Sp.md, vertical: Sp.md),
-            decoration: BoxDecoration(
-              color: t.surfaceAlt,
-              borderRadius: BorderRadius.circular(R.s),
-              border: Border.all(color: t.divider),
-            ),
-            child: Row(
-              children: [
-                Icon(LucideIcons.calendar, color: t.ink, size: IconSize.m),
-                const SizedBox(width: Sp.s),
-                Expanded(
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Text(dateLabel,
-                          style: AppText.bodyStrong.copyWith(color: t.ink)),
-                      Text(hint,
-                          style: AppText.label.copyWith(color: t.inkMuted)),
-                    ],
-                  ),
-                ),
-                Icon(LucideIcons.chevronRight,
-                    color: t.inkMuted, size: IconSize.s),
-              ],
-            ),
-          ),
-        ),
-        const SizedBox(height: Sp.s),
-        Row(
-          children: [
-            Expanded(
-              child: OutlinedButton.icon(
-                onPressed: onShrink,
-                icon: const Icon(LucideIcons.minus, size: 16),
-                label: const Text('-1 week'),
-              ),
-            ),
-            const SizedBox(width: Sp.s),
-            Expanded(
-              child: OutlinedButton.icon(
-                onPressed: onRepeat,
-                icon: const Icon(LucideIcons.plus, size: 16),
-                label: const Text('+1 week'),
-              ),
-            ),
-          ],
-        ),
-      ],
     );
   }
 }

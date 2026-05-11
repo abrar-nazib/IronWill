@@ -799,7 +799,7 @@ class SubjectsScreen extends StatelessWidget {
           itemBuilder: (_, i) {
             if (i == 0) {
               return InkWell(
-                onTap: () => showSubjectEditSheet(context, showAdvancedOptions: true),
+                onTap: () => showSubjectEditSheet(context),
                 borderRadius: BorderRadius.circular(R.s),
                 child: Container(
                   padding: const EdgeInsets.all(Sp.md),
@@ -835,20 +835,8 @@ class SubjectsScreen extends StatelessWidget {
               );
             }
             final s = subjects[i - 1];
-            final today = DateTime.now();
-            final todayDate = DateTime(today.year, today.month, today.day);
-            final daysLeft = DateTime(s.expiresAt.year, s.expiresAt.month, s.expiresAt.day)
-                .difference(todayDate)
-                .inDays;
-            final ttlSummary = daysLeft >= 0
-                ? '$daysLeft day${daysLeft == 1 ? '' : 's'} left on soft expiry'
-                : 'Soft expiry passed ${-daysLeft}d ago';
             return AppCard(
-              onTap: () => showSubjectEditSheet(
-                context,
-                existing: s,
-                showAdvancedOptions: true,
-              ),
+              onTap: () => showSubjectEditSheet(context, existing: s),
               padding: const EdgeInsets.all(Sp.md),
               child: Row(
                 children: [
@@ -864,17 +852,8 @@ class SubjectsScreen extends StatelessWidget {
                   ),
                   const SizedBox(width: Sp.m),
                   Expanded(
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Text(s.name, style: AppText.bodyStrong.copyWith(color: t.ink)),
-                        Text(
-                          ttlSummary,
-                          style: AppText.label.copyWith(
-                              color: daysLeft < 0 ? t.accent : t.inkMuted),
-                        ),
-                      ],
-                    ),
+                    child: Text(s.name,
+                        style: AppText.bodyStrong.copyWith(color: t.ink)),
                   ),
                   Icon(LucideIcons.chevronRight, color: t.inkMuted, size: IconSize.m),
                 ],

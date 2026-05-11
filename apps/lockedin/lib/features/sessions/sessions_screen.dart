@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:go_router/go_router.dart';
 import 'package:intl/intl.dart';
 import 'package:lucide_icons_flutter/lucide_icons.dart';
 
@@ -7,7 +8,8 @@ import '../../services/app_services.dart';
 import '../../theme/tokens.dart';
 import '../../theme/typography.dart';
 import '../../widgets/app_card.dart';
-import 'start_session_sheet.dart';
+import 'edit_session_sheet.dart';
+import 'quick_start_session_sheet.dart';
 
 /// Lists every focus session past + present + future. Tap to edit; FAB
 /// adds a new one. Sessions are grouped by day so the user can read the
@@ -23,9 +25,9 @@ class SessionsScreen extends StatelessWidget {
       backgroundColor: t.bg,
       appBar: AppBar(title: const Text('Focus sessions')),
       floatingActionButton: FloatingActionButton.extended(
-        onPressed: () => showStartFocusSessionSheet(context),
-        icon: const Icon(LucideIcons.plus),
-        label: const Text('New session'),
+        onPressed: () => showQuickStartSessionSheet(context),
+        icon: const Icon(LucideIcons.play),
+        label: const Text('Start one now'),
       ),
       body: ValueListenableBuilder<List<FocusSession>>(
         valueListenable: svc.focusSessions.all,
@@ -34,21 +36,22 @@ class SessionsScreen extends StatelessWidget {
           valueListenable: svc.subjects.all,
           builder: (_, subjects, __) {
             final subjectsById = {for (final s in subjects) s.id: s};
-            if (sessions.isEmpty) {
-              return _Empty();
-            }
             final groups = _groupByDay(sessions);
-            return ListView.builder(
+            return ListView(
               padding: const EdgeInsets.fromLTRB(Sp.md, Sp.s, Sp.md, Sp.x4l),
-              itemCount: groups.length,
-              itemBuilder: (_, idx) {
-                final entry = groups[idx];
-                return _DayGroup(
-                  date: entry.date,
-                  sessions: entry.sessions,
-                  subjectsById: subjectsById,
-                );
-              },
+              children: [
+                _PlanRecurringCard(),
+                if (sessions.isEmpty) ...[
+                  const SizedBox(height: Sp.md),
+                  _Empty(),
+                ],
+                for (final entry in groups)
+                  _DayGroup(
+                    date: entry.date,
+                    sessions: entry.sessions,
+                    subjectsById: subjectsById,
+                  ),
+              ],
             );
           },
         ),
@@ -146,7 +149,7 @@ class _SessionRow extends StatelessWidget {
     final accent = status == FocusSessionStatus.active ? t.accent : t.ink;
     return AppCard(
       padding: const EdgeInsets.all(Sp.md),
-      onTap: () => showStartFocusSessionSheet(context, existing: session),
+      onTap: () => showEditSessionSheet(context, existing: session),
       child: Row(
         children: [
           Container(
@@ -189,6 +192,51 @@ class _SessionRow extends StatelessWidget {
         FocusSessionStatus.active => 'In progress',
         FocusSessionStatus.done => 'Done',
       };
+}
+
+class _PlanRecurringCard extends StatelessWidget {
+  @override
+  Widget build(BuildContext context) {
+    final t = context.tokens;
+    return InkWell(
+      onTap: () => context.push('/settings/sessions/plan'),
+      borderRadius: BorderRadius.circular(R.s),
+      child: Container(
+        padding: const EdgeInsets.all(Sp.md),
+        decoration: BoxDecoration(
+          color: t.surface,
+          borderRadius: BorderRadius.circular(R.s),
+          border: Border.all(color: t.ink, width: 1.5),
+        ),
+        child: Row(
+          children: [
+            Container(
+              width: 36, height: 36,
+              decoration: BoxDecoration(
+                color: t.ink,
+                borderRadius: BorderRadius.circular(R.s),
+              ),
+              alignment: Alignment.center,
+              child: Icon(LucideIcons.calendarRange, color: t.bg, size: IconSize.m),
+            ),
+            const SizedBox(width: Sp.m),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text('Plan recurring sessions',
+                      style: AppText.bodyStrong.copyWith(color: t.ink)),
+                  Text('Fan out a weekday schedule across a week, month, or quarter.',
+                      style: AppText.label.copyWith(color: t.inkMuted)),
+                ],
+              ),
+            ),
+            Icon(LucideIcons.chevronRight, color: t.inkMuted, size: IconSize.m),
+          ],
+        ),
+      ),
+    );
+  }
 }
 
 class _Empty extends StatelessWidget {
