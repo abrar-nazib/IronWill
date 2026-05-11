@@ -789,7 +789,7 @@ class SubjectsScreen extends StatelessWidget {
     final svc = AppServices.of(context);
     return Scaffold(
       backgroundColor: t.bg,
-      appBar: AppBar(title: const Text('Subjects and focus sessions')),
+      appBar: AppBar(title: const Text('Subjects')),
       body: ValueListenableBuilder<List<Subject>>(
         valueListenable: svc.subjects.all,
         builder: (_, subjects, __) => ListView.separated(
@@ -821,9 +821,9 @@ class SubjectsScreen extends StatelessWidget {
                         child: Column(
                           crossAxisAlignment: CrossAxisAlignment.start,
                           children: [
-                            Text('Add focus blocks',
+                            Text('Add a subject',
                                 style: AppText.bodyStrong.copyWith(color: t.ink)),
-                            Text('Group blocks under a subject (Math, Workout, ...)',
+                            Text('A label you tag focus sessions and time blocks with',
                                 style: AppText.label.copyWith(color: t.inkMuted)),
                           ],
                         ),
@@ -840,12 +840,9 @@ class SubjectsScreen extends StatelessWidget {
             final daysLeft = DateTime(s.expiresAt.year, s.expiresAt.month, s.expiresAt.day)
                 .difference(todayDate)
                 .inDays;
-            final blockSummary = s.blocks.isEmpty
-                ? 'No blocks scheduled'
-                : '${s.blocks.length} block${s.blocks.length == 1 ? '' : 's'} per week';
             final ttlSummary = daysLeft >= 0
-                ? '$daysLeft day${daysLeft == 1 ? '' : 's'} left'
-                : 'Expired';
+                ? '$daysLeft day${daysLeft == 1 ? '' : 's'} left on soft expiry'
+                : 'Soft expiry passed ${-daysLeft}d ago';
             return AppCard(
               onTap: () => showSubjectEditSheet(context, existing: s),
               padding: const EdgeInsets.all(Sp.md),
@@ -859,7 +856,7 @@ class SubjectsScreen extends StatelessWidget {
                       border: Border.all(color: t.divider),
                     ),
                     alignment: Alignment.center,
-                    child: Icon(LucideIcons.target, color: t.ink, size: IconSize.m),
+                    child: Icon(LucideIcons.bookmark, color: t.ink, size: IconSize.m),
                   ),
                   const SizedBox(width: Sp.m),
                   Expanded(
@@ -868,7 +865,7 @@ class SubjectsScreen extends StatelessWidget {
                       children: [
                         Text(s.name, style: AppText.bodyStrong.copyWith(color: t.ink)),
                         Text(
-                          '$blockSummary  ·  $ttlSummary',
+                          ttlSummary,
                           style: AppText.label.copyWith(
                               color: daysLeft < 0 ? t.accent : t.inkMuted),
                         ),

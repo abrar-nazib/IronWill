@@ -8,6 +8,7 @@ import '../../theme/tokens.dart';
 import '../../theme/typography.dart';
 import '../../widgets/app_card.dart';
 import '../habits/habit_edit_sheet.dart';
+import '../sessions/start_session_sheet.dart';
 import '../subjects/subject_edit_sheet.dart';
 
 class OnboardingScreen extends StatefulWidget {
@@ -493,72 +494,55 @@ class _FirstSessionPage extends StatelessWidget {
         children: [
           Text('STEP 4 / 4', style: AppText.section.copyWith(color: t.inkMuted)),
           const SizedBox(height: Sp.s),
-          Text('Pick your first subject.',
+          Text('Plan your first focus session.',
               style: AppText.headline.copyWith(color: t.ink, fontSize: 26)),
           const SizedBox(height: Sp.m),
           Text(
-            "A subject is what you're locking in on (Math, Workout, a side project). It runs on a weekly schedule and you log your focus inside each block. You can add more later.",
+            "A focus session is one concrete window of work you commit to. Tag it with a subject (Math, Workout, a side project) so the time you log inside knows what you were focused on. You can add more later.",
             style: AppText.body.copyWith(color: t.inkMuted),
           ),
           const SizedBox(height: Sp.lg),
           OutlinedButton.icon(
-            onPressed: () => showSubjectEditSheet(context),
+            onPressed: () => showStartFocusSessionSheet(context),
             icon: const Icon(LucideIcons.plus),
-            label: const Text('Add focus blocks'),
+            label: const Text('Start a focus session'),
+          ),
+          const SizedBox(height: Sp.s),
+          OutlinedButton.icon(
+            onPressed: () => showSubjectEditSheet(context),
+            icon: const Icon(LucideIcons.bookmark),
+            label: const Text('Just add a subject (no time yet)'),
           ),
           const SizedBox(height: Sp.md),
-          // Inline column instead of Expanded(ListView). See _FirstHabitPage
-          // for the full reasoning: the outer SingleChildScrollView +
-          // IntrinsicHeight wrapper cannot host a flex/scroll child on
-          // Android Skia without paint failures.
-          ValueListenableBuilder<List<Subject>>(
-            valueListenable: svc.subjects.all,
-            builder: (_, subjects, __) {
-              if (subjects.isEmpty) return const SizedBox.shrink();
-              return Column(
-                children: [
-                  for (var i = 0; i < subjects.length; i++) ...[
-                    Builder(builder: (_) {
-                      final s = subjects[i];
-                      final blockCount = s.blocks.length;
-                      final summary = blockCount == 0
-                          ? 'No blocks scheduled yet'
-                          : '$blockCount block${blockCount == 1 ? '' : 's'} this week';
-                      return AppCard(
-                        onTap: () => showSubjectEditSheet(context, existing: s),
-                        padding: const EdgeInsets.all(Sp.m),
-                        child: Row(
-                          children: [
-                            Container(
-                              width: 36, height: 36,
-                              decoration: BoxDecoration(
-                                color: t.surfaceAlt,
-                                borderRadius: BorderRadius.circular(R.s),
-                                border: Border.all(color: t.divider),
-                              ),
-                              alignment: Alignment.center,
-                              child: Icon(LucideIcons.target, color: t.ink, size: IconSize.m),
-                            ),
-                            const SizedBox(width: Sp.m),
-                            Expanded(
-                              child: Column(
-                                crossAxisAlignment: CrossAxisAlignment.start,
-                                children: [
-                                  Text(s.name, style: AppText.bodyStrong.copyWith(color: t.ink)),
-                                  Text(summary, style: AppText.label.copyWith(color: t.inkMuted)),
-                                ],
-                              ),
-                            ),
-                            Icon(LucideIcons.pencil, color: t.inkMuted, size: IconSize.s),
-                          ],
-                        ),
-                      );
-                    }),
-                    if (i < subjects.length - 1) const SizedBox(height: Sp.s),
+          ValueListenableBuilder<List<FocusSession>>(
+            valueListenable: svc.focusSessions.all,
+            builder: (_, sessions, _2) => ValueListenableBuilder<List<Subject>>(
+              valueListenable: svc.subjects.all,
+              builder: (_, subjects, _3) {
+                if (sessions.isEmpty && subjects.isEmpty) {
+                  return const SizedBox.shrink();
+                }
+                final subjectsById = {for (final s in subjects) s.id: s};
+                return Column(
+                  children: [
+                    for (var i = 0; i < sessions.length; i++) ...[
+                      _SessionPreviewCard(
+                        session: sessions[i],
+                        subject: sessions[i].subjectId == null
+                            ? null
+                            : subjectsById[sessions[i].subjectId],
+                      ),
+                      if (i < sessions.length - 1) const SizedBox(height: Sp.s),
+                    ],
+                    if (sessions.isEmpty)
+                      for (var i = 0; i < subjects.length; i++) ...[
+                        _SubjectPreviewCard(subject: subjects[i]),
+                        if (i < subjects.length - 1) const SizedBox(height: Sp.s),
+                      ],
                   ],
-                ],
-              );
-            },
+                );
+              },
+            ),
           ),
           const SizedBox(height: Sp.lg),
           SizedBox(
@@ -569,6 +553,95 @@ class _FirstSessionPage extends StatelessWidget {
           Center(
             child: TextButton(onPressed: onFinish, child: const Text('Finish without one')),
           ),
+        ],
+      ),
+    );
+  }
+}
+
+class _SessionPreviewCard extends StatelessWidget {
+  final FocusSession session;
+  final Subject? subject;
+  const _SessionPreviewCard({required this.session, required this.subject});
+
+  @override
+  Widget build(BuildContext context) {
+    final t = context.tokens;
+    final start = session.startAt;
+    final end = session.endAt;
+    final timeLabel =
+        '${start.hour.toString().padLeft(2, '0')}:${start.minute.toString().padLeft(2, '0')} → ${end.hour.toString().padLeft(2, '0')}:${end.minute.toString().padLeft(2, '0')}';
+    return AppCard(
+      onTap: () => showStartFocusSessionSheet(context, existing: session),
+      padding: const EdgeInsets.all(Sp.m),
+      child: Row(
+        children: [
+          Container(
+            width: 36,
+            height: 36,
+            decoration: BoxDecoration(
+              color: t.surfaceAlt,
+              borderRadius: BorderRadius.circular(R.s),
+              border: Border.all(color: t.divider),
+            ),
+            alignment: Alignment.center,
+            child: Icon(LucideIcons.target, color: t.ink, size: IconSize.m),
+          ),
+          const SizedBox(width: Sp.m),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(subject?.name ?? 'Focus session',
+                    style: AppText.bodyStrong.copyWith(color: t.ink)),
+                Text('$timeLabel  ·  ${session.durationMinutes} min',
+                    style: AppText.label.copyWith(color: t.inkMuted)),
+              ],
+            ),
+          ),
+          Icon(LucideIcons.pencil, color: t.inkMuted, size: IconSize.s),
+        ],
+      ),
+    );
+  }
+}
+
+class _SubjectPreviewCard extends StatelessWidget {
+  final Subject subject;
+  const _SubjectPreviewCard({required this.subject});
+
+  @override
+  Widget build(BuildContext context) {
+    final t = context.tokens;
+    return AppCard(
+      onTap: () => showSubjectEditSheet(context, existing: subject),
+      padding: const EdgeInsets.all(Sp.m),
+      child: Row(
+        children: [
+          Container(
+            width: 36,
+            height: 36,
+            decoration: BoxDecoration(
+              color: t.surfaceAlt,
+              borderRadius: BorderRadius.circular(R.s),
+              border: Border.all(color: t.divider),
+            ),
+            alignment: Alignment.center,
+            child: Icon(LucideIcons.bookmark, color: t.ink, size: IconSize.m),
+          ),
+          const SizedBox(width: Sp.m),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(subject.name,
+                    style: AppText.bodyStrong.copyWith(color: t.ink)),
+                Text('No sessions scheduled yet',
+                    style: AppText.label.copyWith(color: t.inkMuted)),
+              ],
+            ),
+          ),
+          Icon(LucideIcons.pencil, color: t.inkMuted, size: IconSize.s),
         ],
       ),
     );

@@ -27,8 +27,19 @@ import 'package:sqflite_common_ffi/sqflite_ffi.dart';
 ///   v5: habit_logs.metadata (TEXT JSON) holds the day's values for the
 ///       structured fields the user defined on the parent habit. Lets the
 ///       app track e.g. pushup reps `{"PU": [15, 12, 10]}` per day.
+///   v6: BREAKING. Recurring weekly `subject_blocks` is replaced by one-shot
+///       `focus_sessions(id, subject_id NULL, start_at ms, end_at ms,
+///       created_at ms)`. Each session is a concrete time window; a
+///       recurring "every Mon/Wed 9-10" is N sessions inserted by the
+///       frontend. The repo enforces non-overlap on create / update so
+///       collisions can never reach disk.
+///
+///       Also adds `time_blocks.subject_id` (nullable, FK ON DELETE SET
+///       NULL) so each logged quarter records which subject it belonged
+///       to. Stats reads attribution off this column instead of
+///       intersecting logs with the old block schedule.
 class LocalDb {
-  static const int schemaVersion = 5;
+  static const int schemaVersion = 6;
   static const String dbFileName = 'lockedin.db';
 
   /// New subjects default to expiring 7 days from today. Migration of existing
@@ -64,9 +75,9 @@ class LocalDb {
       options: OpenDatabaseOptions(
         version: schemaVersion,
         // sqflite opens with `foreign_keys=OFF` by default. Without this,
-        // the ON DELETE CASCADE clauses on `subject_blocks(subject_id)` and
-        // `habit_logs(habit_id)` are silently ignored and deleting a
-        // parent leaves orphans behind.
+        // the ON DELETE CASCADE on `habit_logs(habit_id)` and ON DELETE
+        // SET NULL on `focus_sessions(subject_id)` / `time_blocks(subject_id)`
+        // are silently ignored, leaving orphans on every parent delete.
         onConfigure: (db) async {
           await db.execute('PRAGMA foreign_keys = ON');
         },
@@ -132,10 +143,13 @@ class LocalDb {
         date_iso TEXT NOT NULL,
         quarter INTEGER NOT NULL,
         utilization INTEGER NOT NULL,
-        PRIMARY KEY(date_iso, quarter)
+        subject_id TEXT,
+        PRIMARY KEY(date_iso, quarter),
+        FOREIGN KEY(subject_id) REFERENCES subjects(id) ON DELETE SET NULL
       )
     ''');
     batch.execute('CREATE INDEX idx_time_blocks_date ON time_blocks(date_iso)');
+    batch.execute('CREATE INDEX idx_time_blocks_subject ON time_blocks(subject_id)');
     batch.execute('''
       CREATE TABLE subjects(
         id TEXT PRIMARY KEY,
@@ -146,21 +160,17 @@ class LocalDb {
       )
     ''');
     batch.execute('''
-      CREATE TABLE subject_blocks(
+      CREATE TABLE focus_sessions(
         id TEXT PRIMARY KEY,
-        subject_id TEXT NOT NULL,
-        day_of_week INTEGER NOT NULL,
-        start_hour INTEGER NOT NULL,
-        start_minute INTEGER NOT NULL,
-        end_hour INTEGER NOT NULL,
-        end_minute INTEGER NOT NULL,
-        pomodoro_enabled INTEGER NOT NULL DEFAULT 0,
-        pomodoro_percent INTEGER NOT NULL DEFAULT 15,
-        FOREIGN KEY(subject_id) REFERENCES subjects(id) ON DELETE CASCADE
+        subject_id TEXT,
+        start_at INTEGER NOT NULL,
+        end_at INTEGER NOT NULL,
+        created_at INTEGER NOT NULL,
+        FOREIGN KEY(subject_id) REFERENCES subjects(id) ON DELETE SET NULL
       )
     ''');
-    batch.execute('CREATE INDEX idx_subject_blocks_subject ON subject_blocks(subject_id)');
-    batch.execute('CREATE INDEX idx_subject_blocks_day ON subject_blocks(day_of_week)');
+    batch.execute('CREATE INDEX idx_focus_sessions_start ON focus_sessions(start_at)');
+    batch.execute('CREATE INDEX idx_focus_sessions_subject ON focus_sessions(subject_id)');
     batch.execute('''
       CREATE TABLE profile(
         id INTEGER PRIMARY KEY CHECK (id = 1),
@@ -211,6 +221,76 @@ class LocalDb {
     if (from < 5) {
       await _migrateV4toV5(db);
     }
+    if (from < 6) {
+      await _migrateV5toV6(db);
+    }
+  }
+
+  /// v5 -> v6: replace recurring subject_blocks with one-shot focus_sessions,
+  /// add time_blocks.subject_id.
+  ///
+  /// Migration strategy: each existing `subject_blocks` row gets fanned out
+  /// into one focus_session per matching weekday from today through the
+  /// owning subject's `expires_at`. That preserves the user's near-term
+  /// schedule on upgrade; anything beyond the expiry was already a manual
+  /// "Repeat next week" decision so we don't speculate further.
+  static Future<void> _migrateV5toV6(Database db) async {
+    await db.execute('ALTER TABLE time_blocks ADD COLUMN subject_id TEXT');
+    await db.execute(
+        'CREATE INDEX IF NOT EXISTS idx_time_blocks_subject ON time_blocks(subject_id)');
+    await db.execute('''
+      CREATE TABLE focus_sessions(
+        id TEXT PRIMARY KEY,
+        subject_id TEXT,
+        start_at INTEGER NOT NULL,
+        end_at INTEGER NOT NULL,
+        created_at INTEGER NOT NULL,
+        FOREIGN KEY(subject_id) REFERENCES subjects(id) ON DELETE SET NULL
+      )
+    ''');
+    await db.execute(
+        'CREATE INDEX idx_focus_sessions_start ON focus_sessions(start_at)');
+    await db.execute(
+        'CREATE INDEX idx_focus_sessions_subject ON focus_sessions(subject_id)');
+
+    final subjects = await db.query('subjects');
+    final expiresBySubject = <String, DateTime>{
+      for (final s in subjects)
+        s['id'] as String: parseIso(s['expires_at'] as String),
+    };
+    final blocks = await db.query('subject_blocks');
+    final nowMs = DateTime.now().millisecondsSinceEpoch;
+    final today = truncate(DateTime.now());
+    for (final b in blocks) {
+      final subjectId = b['subject_id'] as String;
+      final expires = expiresBySubject[subjectId];
+      if (expires == null) continue;
+      final dow = b['day_of_week'] as int;
+      final sh = b['start_hour'] as int;
+      final sm = b['start_minute'] as int;
+      final eh = b['end_hour'] as int;
+      final em = b['end_minute'] as int;
+      if (eh * 60 + em <= sh * 60 + sm) continue;
+      var day = today;
+      while (!day.isAfter(expires)) {
+        if (day.weekday == dow) {
+          final start = DateTime(day.year, day.month, day.day, sh, sm);
+          final end = DateTime(day.year, day.month, day.day, eh, em);
+          final id = 'fs_${nowMs}_${subjectId}_${start.millisecondsSinceEpoch}';
+          await db.insert('focus_sessions', {
+            'id': id,
+            'subject_id': subjectId,
+            'start_at': start.millisecondsSinceEpoch,
+            'end_at': end.millisecondsSinceEpoch,
+            'created_at': nowMs,
+          });
+        }
+        day = day.add(const Duration(days: 1));
+      }
+    }
+    // The old subject_blocks table has been fanned out; drop it. Keeping it
+    // around would just leak through grep and confuse later readers.
+    await db.execute('DROP TABLE subject_blocks');
   }
 
   /// v4 -> v5: add habit_logs.metadata for structured per-day tracking values.
@@ -313,23 +393,23 @@ class LocalDb {
 
   Future<void> close() async => db.close();
 
-  /// Wipe and replace data with the given snapshot. Used by Import. Callers
-  /// (backup.dart) are responsible for converting any legacy `focus_sessions`
-  /// payload into the modern `subjects` + `subject_blocks` shape before passing
+  /// Wipe and replace data with the given snapshot. Used by Import.
+  /// Callers (backup.dart) are responsible for converting any legacy
+  /// `subject_blocks` payload into modern `focus_sessions` before passing
   /// it in: this method only knows the current schema.
   Future<void> replaceAll({
     required List<Map<String, Object?>> habits,
     required List<Map<String, Object?>> habitLogs,
     required List<Map<String, Object?>> timeBlocks,
     required List<Map<String, Object?>> subjects,
-    required List<Map<String, Object?>> subjectBlocks,
+    required List<Map<String, Object?>> focusSessions,
     required Map<String, Object?> profile,
     required Map<String, Object?> settings,
   }) async {
     await db.transaction((txn) async {
       await txn.delete('habit_logs');
       await txn.delete('time_blocks');
-      await txn.delete('subject_blocks');
+      await txn.delete('focus_sessions');
       await txn.delete('subjects');
       await txn.delete('habits');
       await txn.delete('profile');
@@ -340,14 +420,15 @@ class LocalDb {
       for (final l in habitLogs) {
         await txn.insert('habit_logs', l);
       }
-      for (final b in timeBlocks) {
-        await txn.insert('time_blocks', b);
-      }
       for (final s in subjects) {
         await txn.insert('subjects', s);
       }
-      for (final b in subjectBlocks) {
-        await txn.insert('subject_blocks', b);
+      // Insert time_blocks AFTER subjects so the FK on subject_id resolves.
+      for (final b in timeBlocks) {
+        await txn.insert('time_blocks', b);
+      }
+      for (final f in focusSessions) {
+        await txn.insert('focus_sessions', f);
       }
       await txn.insert('profile', {...profile, 'id': 1});
       await txn.insert('settings', {...settings, 'id': 1});
@@ -359,7 +440,7 @@ class LocalDb {
     final logs = await db.query('habit_logs');
     final blocks = await db.query('time_blocks');
     final subjects = await db.query('subjects');
-    final subjectBlocks = await db.query('subject_blocks');
+    final focusSessions = await db.query('focus_sessions');
     final profileRows = await db.query('profile');
     final settingsRows = await db.query('settings');
     return {
@@ -367,7 +448,7 @@ class LocalDb {
       'habit_logs': logs,
       'time_blocks': blocks,
       'subjects': subjects,
-      'subject_blocks': subjectBlocks,
+      'focus_sessions': focusSessions,
       'profile': profileRows,
       'settings': settingsRows,
     };

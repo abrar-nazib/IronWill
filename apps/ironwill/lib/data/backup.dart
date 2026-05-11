@@ -13,21 +13,23 @@ import 'local_db.dart';
 ///
 /// {
 ///   "format": "lockedin-backup",
-///   "version": 2,
+///   "version": 3,
 ///   "exported_at": "2026-05-04T13:42:00.000Z",
 ///   "habits": [...],
 ///   "habit_logs": [...],
 ///   "time_blocks": [...],
 ///   "subjects": [...],
-///   "subject_blocks": [...],
+///   "focus_sessions": [...],
 ///   "profile": {...},
 ///   "settings": {...}
 /// }
 ///
 /// Backwards compatibility: imports also accept legacy format strings
-/// `manup-backup` / `ironwill-backup` and the legacy `focus_sessions` field
-/// (one focus_session becomes one subject with one block per scheduled
-/// weekday). Habits without a `metadata` field default to an empty `{}`.
+/// `manup-backup` / `ironwill-backup`, the v1 `focus_sessions` (recurring
+/// schedule with `days_csv`), and the v2 `subject_blocks` (recurring
+/// weekly blocks). Both legacy shapes are fanned out into modern
+/// one-shot `focus_sessions` rows at import time, covering the subject's
+/// expiry window starting from today.
 class BackupService {
   final LocalDb db;
   BackupService(this.db);
@@ -35,10 +37,10 @@ class BackupService {
   static const String formatId = 'lockedin-backup';
   static const Set<String> _legacyFormatIds = {'manup-backup', 'ironwill-backup'};
 
-  /// Bumped to 2 alongside the schema v3 migration: the export now contains
-  /// `subjects` + `subject_blocks` instead of `focus_sessions`, and each habit
-  /// row carries a `metadata` JSON column.
-  static const int formatVersion = 2;
+  /// Bumped to 3 alongside the schema v6 migration: the export now contains
+  /// modern `focus_sessions` (one-shot windows) instead of `subject_blocks`,
+  /// and `time_blocks` rows now carry a `subject_id`.
+  static const int formatVersion = 3;
 
   /// Build the export string. Pure JSON.
   Future<String> exportJson() async {
@@ -51,7 +53,7 @@ class BackupService {
       'habit_logs': dump['habit_logs'],
       'time_blocks': dump['time_blocks'],
       'subjects': dump['subjects'],
-      'subject_blocks': dump['subject_blocks'],
+      'focus_sessions': dump['focus_sessions'],
       'profile': (dump['profile']!.isNotEmpty ? dump['profile']!.first : <String, Object?>{}),
       'settings': (dump['settings']!.isNotEmpty ? dump['settings']!.first : <String, Object?>{}),
     };
@@ -123,21 +125,32 @@ class BackupService {
     }
     final habits = _coerceList(parsed['habits']).map(_normaliseHabit).toList();
     final logs = _coerceList(parsed['habit_logs']);
-    final timeBlocks = _coerceList(parsed['time_blocks']);
+    final timeBlocks =
+        _coerceList(parsed['time_blocks']).map(_normaliseTimeBlock).toList();
 
-    final hasModernSubjects = parsed.containsKey('subjects');
+    // Three input shapes to handle:
+    //   * modern v3+ export with `focus_sessions` (one-shot windows)
+    //   * v2 export with `subjects` + `subject_blocks` (recurring weekly)
+    //   * v1 export with `focus_sessions` legacy fields (days_csv +
+    //     start_hour/start_minute), which we fan out into modern sessions
     final List<Map<String, Object?>> subjects;
-    final List<Map<String, Object?>> subjectBlocks;
-    if (hasModernSubjects) {
+    final List<Map<String, Object?>> focusSessions;
+    if (parsed.containsKey('focus_sessions') &&
+        _looksModernFocusSessions(parsed['focus_sessions'])) {
       subjects = _coerceList(parsed['subjects']);
-      subjectBlocks = _coerceList(parsed['subject_blocks']);
+      focusSessions = _coerceList(parsed['focus_sessions']);
+    } else if (parsed.containsKey('subjects') &&
+        parsed.containsKey('subject_blocks')) {
+      subjects = _coerceList(parsed['subjects']);
+      focusSessions = _fanOutSubjectBlocks(
+        subjects: subjects,
+        blocks: _coerceList(parsed['subject_blocks']),
+      );
     } else {
-      // v1 export with focus_sessions: collapse each focus_session into a
-      // subject + one block per weekday it ran on.
       final legacy = _coerceList(parsed['focus_sessions']);
-      final pair = _migrateLegacyFocusSessions(legacy);
+      final pair = _fanOutLegacyFocusSessions(legacy);
       subjects = pair.$1;
-      subjectBlocks = pair.$2;
+      focusSessions = pair.$2;
     }
 
     final profile = _coerceMap(parsed['profile']);
@@ -159,7 +172,7 @@ class BackupService {
       habitLogs: logs,
       timeBlocks: timeBlocks,
       subjects: subjects,
-      subjectBlocks: subjectBlocks,
+      focusSessions: focusSessions,
       profile: profile,
       settings: settings,
     );
@@ -172,28 +185,93 @@ class BackupService {
     return {...h, 'metadata': '{}'};
   }
 
-  /// Convert legacy `focus_sessions` list into modern (subjects, blocks). Each
-  /// session becomes one subject row + N block rows (one per scheduled
-  /// weekday). The subject expires `defaultExpiryDays` from today, matching
-  /// the new TTL semantics; the user can extend any time via "Repeat".
-  static (List<Map<String, Object?>>, List<Map<String, Object?>>)
-      _migrateLegacyFocusSessions(List<Map<String, Object?>> legacy) {
-    final subjects = <Map<String, Object?>>[];
-    final blocks = <Map<String, Object?>>[];
+  /// v6 added `time_blocks.subject_id`; pre-v6 exports don't have it.
+  static Map<String, Object?> _normaliseTimeBlock(Map<String, Object?> b) {
+    if (b.containsKey('subject_id')) return b;
+    return {...b, 'subject_id': null};
+  }
+
+  /// A modern focus_sessions row has `start_at` (epoch ms). The legacy v1
+  /// shape uses `days_csv` + `start_hour` etc, which we route through the
+  /// legacy fan-out instead.
+  static bool _looksModernFocusSessions(Object? raw) {
+    if (raw is! List || raw.isEmpty) return false;
+    final first = raw.first;
+    if (first is! Map) return false;
+    return first.containsKey('start_at') && first.containsKey('end_at');
+  }
+
+  /// Convert v2 `subject_blocks` (recurring weekly) into modern one-shot
+  /// focus_sessions. For each block we fan out one session per matching
+  /// weekday from today through the owning subject's expires_at.
+  static List<Map<String, Object?>> _fanOutSubjectBlocks({
+    required List<Map<String, Object?>> subjects,
+    required List<Map<String, Object?>> blocks,
+  }) {
+    final expiresBySubject = <String, DateTime>{};
+    for (final s in subjects) {
+      final id = s['id'] as String?;
+      final ex = s['expires_at'] as String?;
+      if (id != null && ex != null) {
+        try {
+          expiresBySubject[id] = _parseIso(ex);
+        } catch (_) {}
+      }
+    }
+    final out = <Map<String, Object?>>[];
     final today = DateTime.now();
     final todayDate = DateTime(today.year, today.month, today.day);
-    final expiresAt =
-        '${todayDate.add(Duration(days: LocalDb.defaultExpiryDays)).year.toString().padLeft(4, '0')}-'
-        '${todayDate.add(Duration(days: LocalDb.defaultExpiryDays)).month.toString().padLeft(2, '0')}-'
-        '${todayDate.add(Duration(days: LocalDb.defaultExpiryDays)).day.toString().padLeft(2, '0')}';
     final nowMs = DateTime.now().millisecondsSinceEpoch;
+    var counter = 0;
+    for (final b in blocks) {
+      final sid = b['subject_id'] as String?;
+      if (sid == null) continue;
+      final expires = expiresBySubject[sid] ?? todayDate.add(const Duration(days: 7));
+      final dow = (b['day_of_week'] as num?)?.toInt();
+      final sh = (b['start_hour'] as num?)?.toInt() ?? 0;
+      final sm = (b['start_minute'] as num?)?.toInt() ?? 0;
+      final eh = (b['end_hour'] as num?)?.toInt() ?? 0;
+      final em = (b['end_minute'] as num?)?.toInt() ?? 0;
+      if (dow == null || eh * 60 + em <= sh * 60 + sm) continue;
+      var day = todayDate;
+      while (!day.isAfter(expires)) {
+        if (day.weekday == dow) {
+          final start = DateTime(day.year, day.month, day.day, sh, sm);
+          final end = DateTime(day.year, day.month, day.day, eh, em);
+          out.add({
+            'id': 'fs_imp_${nowMs}_${counter++}',
+            'subject_id': sid,
+            'start_at': start.millisecondsSinceEpoch,
+            'end_at': end.millisecondsSinceEpoch,
+            'created_at': nowMs,
+          });
+        }
+        day = day.add(const Duration(days: 1));
+      }
+    }
+    return out;
+  }
+
+  /// Convert v1 legacy `focus_sessions` (one row per "subject" with
+  /// `days_csv` + start/end hour/minute) into v2 subjects + v6
+  /// one-shot focus_sessions.
+  static (List<Map<String, Object?>>, List<Map<String, Object?>>)
+      _fanOutLegacyFocusSessions(List<Map<String, Object?>> legacy) {
+    final subjects = <Map<String, Object?>>[];
+    final today = DateTime.now();
+    final todayDate = DateTime(today.year, today.month, today.day);
+    final expires = todayDate.add(Duration(days: LocalDb.defaultExpiryDays));
+    final expiresIso =
+        '${expires.year.toString().padLeft(4, '0')}-${expires.month.toString().padLeft(2, '0')}-${expires.day.toString().padLeft(2, '0')}';
+    final nowMs = DateTime.now().millisecondsSinceEpoch;
+    final blocks = <Map<String, Object?>>[];
     for (var i = 0; i < legacy.length; i++) {
       final s = legacy[i];
       final id = s['id'] as String;
       subjects.add({
         'id': id,
         'name': s['name'] as String? ?? 'Subject',
-        'expires_at': expiresAt,
+        'expires_at': expiresIso,
         'created_at': nowMs,
         'ord': i,
       });
@@ -203,19 +281,23 @@ class BackupService {
           : csv.split(',').map((x) => int.parse(x.trim())).toList();
       for (final d in days) {
         blocks.add({
-          'id': 'b${nowMs}_${id}_$d',
           'subject_id': id,
           'day_of_week': d,
           'start_hour': s['start_hour'],
           'start_minute': s['start_minute'],
           'end_hour': s['end_hour'],
           'end_minute': s['end_minute'],
-          'pomodoro_enabled': 0,
-          'pomodoro_percent': 15,
         });
       }
     }
-    return (subjects, blocks);
+    final sessions =
+        _fanOutSubjectBlocks(subjects: subjects, blocks: blocks);
+    return (subjects, sessions);
+  }
+
+  static DateTime _parseIso(String s) {
+    final parts = s.split('-');
+    return DateTime(int.parse(parts[0]), int.parse(parts[1]), int.parse(parts[2]));
   }
 
   static List<Map<String, Object?>> _coerceList(Object? raw) {

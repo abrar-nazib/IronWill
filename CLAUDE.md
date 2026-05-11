@@ -158,7 +158,7 @@ Tabular figures must be enabled (`featureSet: tnum`) wherever numbers stack. Tha
 
 The app is fully offline. No network. Choices that drove the architecture:
 
-* **SQLite via `sqflite` (Android) and `sqflite_common_ffi` (Linux desktop)** for typed, queryable persistence. Schema lives in [lib/data/local_db.dart](apps/ironwill/lib/data/local_db.dart). Current schema version is `5`. Bump when columns or tables change and add an `ALTER` block to `_onUpgrade`. See "Schema history" at the bottom for what each version added.
+* **SQLite via `sqflite` (Android) and `sqflite_common_ffi` (Linux desktop)** for typed, queryable persistence. Schema lives in [lib/data/local_db.dart](apps/ironwill/lib/data/local_db.dart). Current schema version is `6`. Bump when columns or tables change and add an `ALTER` block to `_onUpgrade`. See "Schema history" at the bottom for what each version added.
 * **Repositories** in [lib/data/repositories.dart](apps/ironwill/lib/data/repositories.dart) are interface-driven. Mock impls live in [mock_repositories.dart](apps/ironwill/lib/data/mock_repositories.dart) and SQLite impls in [sqlite_repositories.dart](apps/ironwill/lib/data/sqlite_repositories.dart). The UI imports the abstract interfaces only.
 * **Reads through `ValueListenable` streams.** Every list-shaped repository exposes a `ValueNotifier` that the UI binds to via `ValueListenableBuilder`. Writes update the notifier so listeners rebuild without manual `setState` plumbing.
 * **JSON export and import** in [lib/data/backup.dart](apps/ironwill/lib/data/backup.dart). One file, all tables, format string `"lockedin-backup"` plus an integer version. The reader still accepts the legacy `manup-backup` and `ironwill-backup` strings so older exports import cleanly. Import wipes and replaces; we may add a merge-mode later. The export is shared via the system share sheet (`share_plus`); import picks via `file_picker`.
@@ -183,7 +183,7 @@ This is the gnarly part on Android because of Doze and OEM modifications.
 * Routing: `go_router` with a single `ShellRoute` for the bottom nav scaffold.
 * No hardcoded colours, sizes, or strings inside widgets. Pull from `AppTokens`, `AppText`, and `Strings`.
 * No `print` statements committed (use `debugPrint` if anything).
-* Screens own seeded data via `lib/data/mock_db.dart` during the mock phase. Models (`Habit`, `Subject`, `SubjectBlock`, `DayBlocks`, `HabitField`) live in `lib/models/models.dart`.
+* Screens own seeded data via `lib/data/mock_db.dart` during the mock phase. Models (`Habit`, `Subject`, `FocusSession`, `DayBlocks`, `HabitField`) live in `lib/models/models.dart`.
 * Default day pickers select **all 7 days**. The user deselects what they don't want; we don't ship "Weekdays" / "Every day" shortcut buttons because users couldn't tell they were tappable.
 * Comments: skip "what" comments; only document non obvious "why". Public APIs without a clear name get a short doc comment.
 
@@ -206,8 +206,9 @@ Each version's `_onUpgrade` step is in [lib/data/local_db.dart](apps/ironwill/li
 * **v3**: `focus_sessions` replaced by `subjects` + `subject_blocks`. A subject is the umbrella term ("Math", "Workout") and owns N scheduled blocks across weekdays. `subjects.expires_at` carries a TTL so a schedule decays after `LocalDb.defaultExpiryDays` (7) unless the user presses "Repeat next week". `habits.metadata` (TEXT JSON) is added; structured fields like `{"PU":"intList"}` go here. `settings.block_size_minutes` (default 30, allowed 15/30/60), `settings.pomodoro_enabled` (default 0), `settings.pomodoro_percent` (default 15) added.
 * **v4**: `profile.weekly_focus_minutes_csv` (Mon..Sun, 7 ints comma-separated, default `240` × 7) supersedes the single `daily_focus_minutes_target`. Per-weekday focus targets, capped 0..1440 min so a SAT/GRE-prep user can set 12-hour days. The legacy `daily_focus_minutes_target` column stays as a max-summary for older readers.
 * **v5**: `habit_logs.metadata` (TEXT JSON, default `{}`) holds per-day values for the structured fields the user defined on the parent habit. Values can be string, int, bool, list of int, list of bool.
+* **v6**: BREAKING. Recurring weekly `subject_blocks` replaced by one-shot `focus_sessions(id, subject_id NULL, start_at ms, end_at ms, created_at ms)`. The frontend fans out "every Mon/Wed 9-10" into N rows. The repo enforces non-overlap on create / update so collisions never reach disk. `time_blocks.subject_id` (nullable, FK ON DELETE SET NULL) tags each logged quarter with the subject it belonged to so stats attribute directly off the column instead of intersecting with the (gone) recurring schedule. Migration fans every `subject_blocks` row out into focus_sessions covering today through the owning subject's `expires_at`, then drops `subject_blocks`.
 
-The backup importer in [lib/data/backup.dart](apps/ironwill/lib/data/backup.dart) is forward-compatible with the legacy `manup-backup` and `ironwill-backup` format strings AND the legacy `focus_sessions` field (it migrates each focus_session into a subject + N blocks at import time). Single-value `daily_focus_minutes_target` is expanded to 7 weekdays. Habit rows without `metadata` get `{}`. So the user's old export imports cleanly into the new schema.
+The backup importer in [lib/data/backup.dart](apps/ironwill/lib/data/backup.dart) is forward-compatible with all four legacy shapes: `manup-backup`/`ironwill-backup` format strings, v1 `focus_sessions` (one row per subject with `days_csv` + start/end hour/minute), v2 `subjects` + `subject_blocks` (recurring weekly), and v3+ modern `focus_sessions` (one-shot windows with `start_at`/`end_at` ms). The first three are fanned out into modern focus_sessions at import time, covering today through each subject's expiry. Single-value `daily_focus_minutes_target` is expanded to 7 weekdays; habit rows without `metadata` get `{}`; time_block rows without `subject_id` get null. So every old export imports cleanly into the new schema.
 
 ## App branding
 
@@ -220,14 +221,50 @@ LockedIn (formerly ManUp / IronWill). The user-visible label, applicationId, DB 
 | 1 | done | Rename to LockedIn (label, applicationId, DB, channels, backup format). Logo: borderless fist v3, padded so the adaptive icon mask doesn't crop. APK output renamed to `LockedIn-debug.apk` / `LockedIn-release.apk` via Gradle `outputFileName`. |
 | 2 | done | Schema v3. `Subject` + `SubjectBlock` models replace `FocusSession`. Multi-block-per-day allowed. Schedule TTL with "+1 week" / "Repeat next week" buttons. Notifications + foreground service consume `subjects`. `currentlyActiveBlock` helper replaces `currentlyActiveSession`. |
 | 2.5 | done | Schema v4. `weeklyFocusMinutes` per-weekday target editor under Settings → Focus targets. 0..1440 min cap. Focus streak respects per-day target (0-min day is a free pass, doesn't break the streak). |
-| 3 | done | Block-size selector (15/30/60) inline on the Time tab and in Settings. Storage stays at 15-min sub-blocks; render aggregates by averaging utilisation percentages and rounding to the nearest tier. Smart picker snaps to the chosen block size. FAB label adapts ("Log this hour" / "Log this 30 min" / "Log this quarter"). |
-| 4 | done | Pomodoro: per-block toggle in the floating timer dialog AND on the subject editor. Settings → Pomodoro for the global default (toggle + 5..50% slider). Notifications: when pomodoro is on, the accountability tick fires once at rest start instead of every quarter. In-app timer pill switches from ember to steel during rest with a coffee glyph; the floating dialog flips its emphasized block to ember and shows "REST PERIOD". |
-| 5 | done | Schema v5. Habit `metadata.fields` defines tracking schema (e.g. `PU: intList`). The habit log sheet shows a typed editor per field (text / number / yes-no / list of numbers / list of yes-no). Habit detail screen has a "Tracking fields" card showing the last 14 logged days plus a per-field summary line ("total 37 reps" / "avg 25" / "5/7 yes"). |
-| 6 | pending | Design review pass against `screenshots/` references. |
-| 7 | pending | E2E smoke test on web + device, ship release APK. |
+| 3 | done | Block-size selector + Schema v5 + habit metadata KV editor. |
+| 4 | done | Pomodoro universalised (Settings only, no per-block override). Block-size universalised (Settings only, removed from Time tab). `computeBlockTiming` now takes `blockSizeMinutes / pomodoroEnabled / pomodoroPercent` and renders 2 cards (off) or 3 cards (on: total / next log / next rest) in the floating dialog. Foreground service tray uses the same math via the task isolate — sends settings via `sendDataToTask`. Pre-start branch in `_renderBody` reads "Starts in MM:SS" instead of misleading "Log in" before block start. Self-stop after `endAt + 5 min` so the tray can't tick forever on stale data after process death. |
+| 4.5 | done | Pomodoro model: rest per logging cycle. Each `blockSize` cycle has focus phase + rest slice = `(cycleSize × pomodoroPercent / 100)`. Repeats until session end. Notifications split mandatory log tick (every cycleEnd) from optional rest tick (every restStart, only when pomodoro on). Different notification ids per cycle for log and rest. |
+| 5 | done | Notification scheduling overhaul. Was: pre-schedule 7 days of session ticks. Bugs hit: (1) `qIndex` reset to 0 per block caused same-day cross-block id collisions because `sessionTickId` keyed on `subject.id`; (2) the `& 0x1FFF` mask was only 8192 buckets and nearly-identical block ids collided modulo 8192 anyway. Fixed: key on `block.id`, widen the hash bucket to ~1B via `'$blockId:$day:$qIndex'.hashCode.abs() % (1 << 30) + 100000`. Then replaced the 7-day pre-schedule with a 2 h horizon refreshed every 30 s by the existing reconcile ticker, so mid-session settings changes propagate cleanly without a giant cancel-and-reschedule pass. `cancelAll()` proved unreliable across `install -r`; switched to enumerating `pendingNotificationRequests()` and cancelling each by id. |
+| 6 | done | UX polish batch: dark-mode focus picker fix, preset chips on focus target, default reminder 18:00, default field type "number", cadence 2x2 grid, tracking-fields collapsed "advanced" toggle, glyph picker modal with categorised library, block editor mode chips (Weekdays default), expiry calendar with block-count badges, today log button restructure, habit field cascade (delete strips historical metadata), settings entry rename, onboarding "screen goes dark" bug fixed (was `Expanded(ListView)` inside `IntrinsicHeight` — Android Skia paints black, web's CanvasKit fudges it). `FocusScope.unfocus()` on every onboarding page transition and modal dismiss so soft keyboard drops with the route change. |
+| 7 | done | Stats enrichment: highlights card (best day / worst day / peak hour-of-day / unlogged blocks), 24-bar hour-of-day strip, per-habit completion list, per-subject focus breakdown card. Subject attribution is schedule-based today (intersect time_blocks with subject_blocks on weekday + window). `WeeklyStats` carries `bestDayIndex / worstDayIndex / goalHitDays / evaluatedTargetDays / avgUtilizationPct / hourlyMinutes / unloggedFocusQuarters / habitRows / subjectRows`. |
+| 8 | done | Schema v6. Recurring `subject_blocks` replaced by one-shot `focus_sessions` (start_at / end_at / nullable subject_id). `time_blocks.subject_id` added (FK ON DELETE SET NULL). `FocusSessionsRepository` enforces non-overlap on create + update. Subjects are now just labels (name + soft expiry). New "Start a focus session" sheet (home, onboarding, sessions list) with subject picker + quick duration chips. New Sessions screen at `/settings/sessions` lists everything grouped by day. Logging UX rewritten: bottom sheet asks "How focused were you the past X minutes?", auto-picks subject when a session overlaps the block, asks the user "which session" when 2+ overlap, writes `time_blocks.subject_id` so stats attribution is now tag-based. `Stats` range picker (Week/Month/Year) functional — uses new `StatsRange` enum routed through `getRange()`. Settings reachable from every tab AppBar. Notifications + foreground service walk `focus_sessions` instead of subject_blocks; the 2 h horizon + 30 s reconcile ticker is unchanged. Backup imports legacy v1 focus_sessions, v2 subject_blocks, AND v3 focus_sessions cleanly — all three fan out into modern one-shots at import time. |
+| 9 | pending | Design review pass against `screenshots/` references. |
+| 10 | pending | E2E smoke test on web + device, ship release APK. |
 
 ## Open knowns / not-yet-fixed
 
 * The web-server flutter device requires the Dart Debug Chrome extension to bootstrap; we use `flutter build web` + a static HTTP server when smoke-testing in Playwright instead.
 * The persistent foreground notification updates at 1 Hz to render the dual timer live. That's noticeable battery on long sessions; we may bump to 2 s if users complain.
 * The Radio widget pair in `_FieldEditorDialog` uses the pre-3.32 API (`groupValue`, `onChanged`); migrate to `RadioGroup` when we move to a newer Flutter SDK.
+* Mock backend now defaults `AppSettings.onboarded = true` so web previews skip the onboarding flow. Live (sqlite) backend is unaffected — that path reads `onboarded` from the DB.
+* Subjects screen still uses the old "expiry" framing. v6 made expiry a soft hint (it no longer gates sessions), so the wording could be slimmed further. Not urgent.
+
+## ERD documentation
+
+`docs/lockedin-erd-v5.drawio` — current schema (v5) ER diagram. Open in https://app.diagrams.net. 7 tables, 2 enforced FKs (with ON DELETE CASCADE), 4 app-enforced logical relationships shown as dashed edges. Composite PKs marked `PK1` / `PK2` (`habit_logs` PK = `(habit_id, date_iso)`, `time_blocks` PK = `(date_iso, quarter)`). Python validator in commit `a466b5f` confirms 0 table-table overlaps and 0 edge-table intersections. Update this file when the schema changes.
+
+## v6 planning (Subject/SubjectBlock → Subject/FocusSession + tagged TimeBlocks)
+
+User feedback: planning a week (or even one day) of focus sessions ahead is too high-friction. People want "start now, do it, forget it." Also want to backfill past performance and tag the time they actually focused on a subject.
+
+Direction (breaking change, user accepts users will dump dbs):
+
+* **Subjects** stay as-is. Just the umbrella name + expiry.
+* **SubjectBlock** is removed. Replaced by **FocusSession**: a one-shot schedule with `start_at` + `end_at` + nullable `subject_id` + status. No weekday recurrence at the model level — recurring is sugar on top (user creates many sessions at once via the Settings "plan mode" for advanced users).
+* **time_blocks** gains a nullable `subject_id` foreign key. This is the new attribution path: a 15-minute quarter knows which subject (if any) it belongs to, computed at log time rather than post-hoc by intersecting with schedules.
+
+Use cases the new model unlocks:
+
+1. On-demand focus session from home: a floating dialog with start/end/date + subject selector (last-selected pre-picked, "new subject" inline). Onboarding uses the same dialog.
+2. Logging a quarter during an active focus session: time_block's subject_id auto-populates from the active focus_session's subject_id hint.
+3. Logging a quarter outside any active session: user picks subject (or skips) alongside utilisation. Same path supports backfilling old days.
+4. Stats: per-subject day-by-day detail using the tagged time_blocks. No more schedule-based attribution.
+
+UI surface:
+
+* Home: primary CTA = "Start a focus session" (opens the floating dialog).
+* Settings → "Subjects and focus sessions" → the advanced "plan mode" (bulk session creation / recurring templates).
+* Settings reachable from all four bottom-nav tabs, not just home.
+* Stats `_RangePicker` (Week / Month / Year) actually swaps the data range.
+
+Out-of-scope but on the radar: optional backend sync via websocket for cross-device + "see other people's stats" social pressure, IP-geolocation lookup (no GPS) for region-grouped leaderboards.

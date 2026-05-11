@@ -6,6 +6,7 @@ import 'features/habits/habit_detail_screen.dart';
 import 'features/habits/habits_screen.dart';
 import 'features/home/home_screen.dart';
 import 'features/onboarding/onboarding_screen.dart';
+import 'features/sessions/sessions_screen.dart';
 import 'features/settings/settings_screen.dart';
 import 'features/settings/sub_screens.dart';
 import 'features/shell/shell.dart';
@@ -88,6 +89,10 @@ GoRouter buildRouter(AppServices services) {
           GoRoute(
             path: 'subjects',
             builder: (c, s) => const SubjectsScreen(),
+          ),
+          GoRoute(
+            path: 'sessions',
+            builder: (c, s) => const SessionsScreen(),
           ),
           GoRoute(
             path: 'pomodoro',

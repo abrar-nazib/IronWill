@@ -15,6 +15,7 @@ class MockDb {
   // Mutable backing state. Repositories mutate these and notify listeners.
   late final Map<String, Habit> habits = _seedHabits();
   late final List<Subject> subjects = _seedSubjects();
+  late final List<FocusSession> focusSessions = _seedFocusSessions();
   late final Map<DateTime, DayBlocks> days = _seedDays(today);
 
   UserProfile profile = const UserProfile(
@@ -24,7 +25,7 @@ class MockDb {
     avatarLetter: 'A',
   );
 
-  AppSettings settings = const AppSettings();
+  AppSettings settings = const AppSettings(onboarded: true);
 
   static MockDb? _instance;
   static MockDb get instance => _instance ??= MockDb._();
@@ -111,18 +112,12 @@ class MockDb {
   }
 
   /// Seed subjects expire 7 days from `today` so the mock matches the
-  /// production TTL behaviour (the user can press "Repeat next week" to extend).
+  /// production TTL behaviour (the user can press "Repeat next week" to
+  /// extend). Subjects are now just names; concrete time windows live on
+  /// focus_sessions (see [_seedFocusSessions]).
   List<Subject> _seedSubjects() {
     final created = today;
     final expiresAt = today.add(const Duration(days: 7));
-    SubjectBlock blk(String id, String subjectId, int day, int sh, int sm, int eh, int em) =>
-        SubjectBlock(
-          id: id,
-          subjectId: subjectId,
-          dayOfWeek: day,
-          start: TimeOfDay(hour: sh, minute: sm),
-          end: TimeOfDay(hour: eh, minute: em),
-        );
     return [
       Subject(
         id: 'subj_deep_work',
@@ -130,10 +125,6 @@ class MockDb {
         expiresAt: expiresAt,
         createdAt: created,
         order: 0,
-        blocks: [
-          for (final d in const [1, 2, 3, 4, 5])
-            blk('blk_deep_$d', 'subj_deep_work', d, 6, 0, 9, 0),
-        ],
       ),
       Subject(
         id: 'subj_build',
@@ -141,10 +132,6 @@ class MockDb {
         expiresAt: expiresAt,
         createdAt: created,
         order: 1,
-        blocks: [
-          for (final d in const [1, 2, 3, 4, 5])
-            blk('blk_build_$d', 'subj_build', d, 14, 0, 16, 0),
-        ],
       ),
       Subject(
         id: 'subj_review',
@@ -152,12 +139,39 @@ class MockDb {
         expiresAt: expiresAt,
         createdAt: created,
         order: 2,
-        blocks: [
-          for (final d in const [1, 2, 3, 4, 5, 6, 7])
-            blk('blk_review_$d', 'subj_review', d, 21, 0, 22, 0),
-        ],
       ),
     ];
+  }
+
+  /// One concrete focus session per subject for the next 7 days. Times mirror
+  /// the legacy seed schedule so the rest of the UI still has plausible
+  /// "active session" / "up next" data to render in the web preview build.
+  List<FocusSession> _seedFocusSessions() {
+    final out = <FocusSession>[];
+    final created = today;
+    DateTime at(int dayOffset, int hour, int minute) {
+      final d = today.add(Duration(days: dayOffset));
+      return DateTime(d.year, d.month, d.day, hour, minute);
+    }
+    int counter = 0;
+    void add(String subjectId, int dayOffset, int sh, int eh) {
+      out.add(FocusSession(
+        id: 'fs_seed_${subjectId}_${counter++}',
+        subjectId: subjectId,
+        startAt: at(dayOffset, sh, 0),
+        endAt: at(dayOffset, eh, 0),
+        createdAt: created,
+      ));
+    }
+    for (var day = 0; day < 7; day++) {
+      final dow = today.add(Duration(days: day)).weekday;
+      if (dow >= 1 && dow <= 5) {
+        add('subj_deep_work', day, 6, 9);
+        add('subj_build', day, 14, 16);
+      }
+      add('subj_review', day, 21, 22);
+    }
+    return out;
   }
 
   Map<DateTime, DayBlocks> _seedDays(DateTime end) {

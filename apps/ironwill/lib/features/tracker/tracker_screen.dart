@@ -114,6 +114,11 @@ class _TrackerScreenState extends State<TrackerScreen> {
                       tooltip: 'Next day',
                       onPressed: () => _setDate(_date.add(const Duration(days: 1))),
                     ),
+                    IconButton(
+                      icon: const Icon(LucideIcons.settings),
+                      tooltip: 'Settings',
+                      onPressed: () => context.push('/settings'),
+                    ),
                     const SizedBox(width: Sp.s),
                   ],
                 ),
@@ -190,17 +195,65 @@ class _TrackerScreenState extends State<TrackerScreen> {
       firstQuarterIndex: firstIndex,
       stride: stride,
     );
+    // Inherit any existing subject_id from the first sub-quarter of the
+    // block so re-logging the same block defaults to the same subject.
+    String? existingSubjectId;
+    if (day.subjectIds.length == day.quarters.length &&
+        firstIndex < day.subjectIds.length) {
+      existingSubjectId = day.subjectIds[firstIndex];
+    }
+    // Subject inference: any focus session that overlaps the block's
+    // wall-clock window contributes a candidate subject. If exactly one
+    // session matches, we pre-pick its subject. If multiple match, we
+    // surface them all and ask the user to pick.
+    final blockStart = DateTime(
+        _date.year, _date.month, _date.day, 0, 0, 0)
+        .add(Duration(minutes: firstIndex * 15));
+    final blockEnd = blockStart.add(Duration(minutes: blockSize));
+    final overlapping = svc.focusSessions.overlapping(blockStart, blockEnd);
+    final subjectsAll = svc.subjects.all.value;
+    final subjectsById = {for (final s in subjectsAll) s.id: s};
+    final candidates = <Subject>[];
+    final seen = <String>{};
+    String? autoPicked;
+    var distinctSubjects = 0;
+    for (final s in overlapping) {
+      if (s.subjectId == null) continue;
+      if (seen.add(s.subjectId!)) {
+        final subj = subjectsById[s.subjectId];
+        if (subj != null) {
+          candidates.add(subj);
+          distinctSubjects++;
+        }
+      }
+    }
+    // Fall back: when no session overlaps, still let the user pick any
+    // subject. Empty list means "subject picker hidden" inside the sheet.
+    if (candidates.isEmpty) candidates.addAll(subjectsAll);
+    if (distinctSubjects == 1) autoPicked = candidates.first.id;
+    final askWhich = distinctSubjects > 1;
+
     final picked = await showLogBlockSheet(
       context,
       current: aggregated,
       quarterIndex: firstIndex,
       blockSizeMinutes: blockSize,
+      candidateSubjects: candidates,
+      currentSubjectId: existingSubjectId,
+      autoPickedSubjectId: autoPicked,
+      askWhichSession: askWhich,
     );
     if (picked == null) return;
     for (var i = 0; i < stride; i++) {
       final idx = firstIndex + i;
       if (idx >= 96) break;
-      await svc.time.logQuarter(_date, idx, picked);
+      await svc.time.logQuarter(
+        _date,
+        idx,
+        picked.utilization,
+        subjectId: picked.subjectId,
+        clearSubjectId: picked.clearSubjectId,
+      );
     }
     if (!mounted) return;
     setState(() {

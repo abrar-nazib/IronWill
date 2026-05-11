@@ -1,7 +1,9 @@
 import 'package:flutter/material.dart';
+import 'package:go_router/go_router.dart';
 import 'package:intl/intl.dart';
 import 'package:lucide_icons_flutter/lucide_icons.dart';
 
+import '../../data/repositories.dart';
 import '../../models/models.dart';
 import '../../models/utilization.dart';
 import '../../services/app_services.dart';
@@ -18,10 +20,14 @@ class StatsScreen extends StatefulWidget {
   State<StatsScreen> createState() => _StatsScreenState();
 }
 
-enum _Range { week, month, year }
-
 class _StatsScreenState extends State<StatsScreen> {
-  _Range _range = _Range.week;
+  StatsRange _range = StatsRange.week;
+
+  String get _rangeLabel => switch (_range) {
+        StatsRange.week => 'LAST 7 DAYS',
+        StatsRange.month => 'LAST 30 DAYS',
+        StatsRange.year => 'LAST 365 DAYS',
+      };
 
   @override
   Widget build(BuildContext context) {
@@ -32,7 +38,7 @@ class _StatsScreenState extends State<StatsScreen> {
       body: SafeArea(
         bottom: false,
         child: FutureBuilder<WeeklyStats>(
-          future: svc.stats.getWeekly(),
+          future: svc.stats.getRange(_range),
           builder: (context, snap) {
             final stats = snap.data;
             return CustomScrollView(
@@ -47,13 +53,21 @@ class _StatsScreenState extends State<StatsScreen> {
                     child: Column(
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
-                        Text('LAST 7 DAYS',
+                        Text(_rangeLabel,
                             style: Theme.of(context).textTheme.labelSmall?.copyWith(color: t.inkMuted)),
                         const SizedBox(height: Sp.xs),
                         Text('Stats', style: AppText.headline.copyWith(color: t.ink)),
                       ],
                     ),
                   ),
+                  actions: [
+                    IconButton(
+                      icon: const Icon(LucideIcons.settings),
+                      tooltip: 'Settings',
+                      onPressed: () => context.push('/settings'),
+                    ),
+                    const SizedBox(width: Sp.s),
+                  ],
                 ),
                 if (stats == null)
                   const SliverToBoxAdapter(
@@ -66,7 +80,7 @@ class _StatsScreenState extends State<StatsScreen> {
                   SliverPadding(
                     padding: const EdgeInsets.fromLTRB(Sp.md, 0, Sp.md, Sp.x4l),
                     sliver: SliverList.list(children: [
-                      _RangePicker(current: _range, onChange: (r) => setState(() => _range = r)),
+                      StatsRangePicker(current: _range, onChange: (r) => setState(() => _range = r)),
                       const SizedBox(height: Sp.m),
                       Row(
                         children: [
@@ -146,15 +160,15 @@ class _StatsScreenState extends State<StatsScreen> {
   }
 }
 
-class _RangePicker extends StatelessWidget {
-  final _Range current;
-  final ValueChanged<_Range> onChange;
-  const _RangePicker({required this.current, required this.onChange});
+class StatsRangePicker extends StatelessWidget {
+  final StatsRange current;
+  final ValueChanged<StatsRange> onChange;
+  const StatsRangePicker({required this.current, required this.onChange});
 
   @override
   Widget build(BuildContext context) {
     final t = context.tokens;
-    Widget chip(_Range r, String label) {
+    Widget chip(StatsRange r, String label) {
       final selected = current == r;
       return Expanded(
         child: GestureDetector(
@@ -185,9 +199,9 @@ class _RangePicker extends StatelessWidget {
         border: Border.all(color: t.divider),
       ),
       child: Row(children: [
-        chip(_Range.week, 'Week'),
-        chip(_Range.month, 'Month'),
-        chip(_Range.year, 'Year'),
+        chip(StatsRange.week, 'Week'),
+        chip(StatsRange.month, 'Month'),
+        chip(StatsRange.year, 'Year'),
       ]),
     );
   }
@@ -691,10 +705,7 @@ class _SubjectStatRow extends StatelessWidget {
     final t = context.tokens;
     final ratio = (maxFocus == 0 ? 0.0 : row.focusedMinutes / maxFocus)
         .clamp(0.0, 1.0);
-    final coverage = row.scheduledMinutes == 0
-        ? 0
-        : ((row.loggedQuarters * 15 / row.scheduledMinutes) * 100)
-            .round();
+    final loggedMins = row.loggedQuarters * 15;
     return Padding(
       padding: const EdgeInsets.symmetric(vertical: Sp.s),
       child: Column(
@@ -723,7 +734,7 @@ class _SubjectStatRow extends StatelessWidget {
                         style: AppText.bodyStrong.copyWith(color: t.ink)),
                     const SizedBox(height: 2),
                     Text(
-                      '${(row.focusedMinutes / 60).toStringAsFixed(1)}h focused  ·  ${row.scheduledMinutes ~/ 60}h ${row.scheduledMinutes % 60}m scheduled',
+                      '${(row.focusedMinutes / 60).toStringAsFixed(1)}h focused  ·  ${row.loggedQuarters} block${row.loggedQuarters == 1 ? '' : 's'} logged',
                       style: AppText.label.copyWith(color: t.inkMuted),
                     ),
                   ],
@@ -739,7 +750,7 @@ class _SubjectStatRow extends StatelessWidget {
                         fontSize: 14,
                         fontWeight: FontWeight.w800,
                       )),
-                  Text('$coverage% logged',
+                  Text('${loggedMins}m logged',
                       style: AppText.label.copyWith(color: t.inkMuted)),
                 ],
               ),

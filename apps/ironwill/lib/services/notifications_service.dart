@@ -58,18 +58,15 @@ class NotificationsService {
   /// - 2000..2999: session start (active) markers
   /// - 100000..2^31: session quarter ticks
   ///
-  /// Quarter-tick ids are hashed from the full tuple `(blockId, day, qIndex)`
+  /// Quarter-tick ids are hashed from the full tuple `(sessionId, qIndex)`
   /// across a ~2.1B bucket space to make collisions effectively impossible.
-  /// The previous 8192-bucket mask collided in practice when the user had
-  /// multiple blocks per day with similar ids (which is common: blocks for
-  /// the same subject have IDs that differ by only a few digits).
+  /// Each FocusSession owns its own id namespace so two sessions back-to-back
+  /// (or the same subject on consecutive days) never share a tick id.
   static int habitReminderId(String habitId) => 1000 + (habitId.hashCode & 0x3FF);
   static int sessionActiveId(String sessionId, int day) =>
       2000 + ((sessionId.hashCode + day * 31) & 0x3FF);
-  static int sessionTickId(String blockId, int day, int qIndex) {
-    final raw = '$blockId:$day:$qIndex'.hashCode;
-    // Map to positive 100000..2^31 range, well above the habit/session
-    // id namespaces.
+  static int sessionTickId(String sessionId, int qIndex) {
+    final raw = '$sessionId:$qIndex'.hashCode;
     return 100000 + (raw.abs() % (1 << 30));
   }
 
@@ -172,6 +169,7 @@ class NotificationsService {
 
   Future<void> rescheduleAll({
     required List<Habit> habits,
+    required List<FocusSession> sessions,
     required List<Subject> subjects,
     required AppSettings settings,
   }) async {
@@ -191,23 +189,20 @@ class NotificationsService {
         await _scheduleHabitReminder(h, settings.alarm);
       }
     }
-    // Use system-local DateTime and convert via TZDateTime.from. This keeps
-    // the absolute moment correct even when tz.local is UTC (the timezone db
-    // does not always know the system's IANA zone, so we cannot rely on
-    // tz.local for wall-clock arithmetic).
+    final subjectsById = {for (final s in subjects) s.id: s};
     final now = DateTime.now();
     final horizon = now.add(sessionTickHorizon);
-    // Look ahead at most 1 day. With a 2 h horizon, day offset 1 is only
-    // relevant in the rare case of a session that crosses midnight.
-    for (int dayOffset = 0; dayOffset < 2; dayOffset++) {
-      final date = DateTime(now.year, now.month, now.day + dayOffset);
-      for (final s in subjects) {
-        if (!s.isLiveOn(date)) continue;
-        for (final b in s.blocks) {
-          if (b.dayOfWeek != date.weekday) continue;
-          await _scheduleBlockForDay(s, b, date, settings, horizon);
-        }
-      }
+    // Walk every session whose window overlaps [now, horizon]. Each gets
+    // its log/rest ticks scheduled. The reconcile ticker in main.dart
+    // re-runs this on a 30 s cadence so a session that starts later in
+    // the day will pick up its ticks once it slides into the window.
+    for (final session in sessions) {
+      if (!session.endAt.isAfter(now)) continue;
+      if (session.startAt.isAfter(horizon)) continue;
+      final subjectName = session.subjectId == null
+          ? 'Focus session'
+          : (subjectsById[session.subjectId]?.name ?? 'Focus session');
+      await _scheduleSession(session, subjectName, settings, horizon);
     }
     // The persistent "session active" notification is driven by a proper
     // foreground service (see FocusSessionForegroundController) so it
@@ -249,34 +244,23 @@ class NotificationsService {
     );
   }
 
-  Future<void> _scheduleBlockForDay(
-    Subject subject,
-    SubjectBlock block,
-    DateTime date,
+  /// Schedule log + (optional) rest ticks across one [FocusSession]. The
+  /// session window is split into cycles of `settings.blockSizeMinutes`.
+  /// A mandatory log tick fires at each cycle end; when pomodoro is on,
+  /// an extra "rest now" tick fires at `cycleEnd - restMinutes` inside
+  /// the same cycle.
+  Future<void> _scheduleSession(
+    FocusSession session,
+    String subjectName,
     AppSettings settings,
     DateTime horizon,
   ) async {
-    final start = DateTime(
-        date.year, date.month, date.day, block.start.hour, block.start.minute);
-    final end = DateTime(
-        date.year, date.month, date.day, block.end.hour, block.end.minute);
+    final start = session.startAt;
+    final end = session.endAt;
     if (!end.isAfter(start)) return;
     final now = DateTime.now();
-    final dayKey = date.day + date.month * 31;
     final alarm = settings.alarm;
 
-    // Block-size and pomodoro are universal settings. Each focus session
-    // is split into cycles of [blockSizeMinutes].
-    //
-    // Mandatory: at every cycle's END, fire a "log how that cycle went"
-    // notification. Independent of pomodoro.
-    //
-    // Optional: when pomodoro is on, ALSO fire a "rest now" notification
-    // at the cycle's restStart (= cycleEnd - restMinutes). This is purely
-    // informational; the log notification still fires at cycleEnd.
-    //
-    // Two notification ids per cycle when pomodoro is on (log + rest);
-    // one when pomodoro is off (log only).
     final pomoOn = settings.pomodoroEnabled;
     final pomoPercent = settings.pomodoroPercent;
     final blockSize = settings.blockSizeMinutes;
@@ -289,35 +273,23 @@ class NotificationsService {
       final cycleEnd = naiveCycleEnd.isAfter(end) ? end : naiveCycleEnd;
       final cycleDurationMin = cycleEnd.difference(cycleStart).inMinutes;
 
-      // Stop scheduling once we're past the look-ahead horizon. The
-      // reconcile ticker will refresh the queue when these are nearer.
       if (cycleStart.isAfter(horizon)) break;
 
-      // Mandatory log tick at the end of the cycle.
-      //
-      // The notification id has to key on `block.id` (not `subject.id`),
-      // otherwise two blocks of the same subject on the same day, which
-      // both restart `qIndex` at 0, would collide and the later block
-      // would overwrite the earlier one's cycle ticks. That bug
-      // produced "missing notifications for the first N cycles of every
-      // block except the last" before this fix.
       if (cycleEnd.isAfter(now)) {
         await _plugin.zonedSchedule(
-          sessionTickId(block.id, dayKey, qIndex * 2),
-          _cycleTitle(blockSize, subject.name),
-          'Log how the last $cycleDurationMin minutes went. Tap to open the tracker.',
+          sessionTickId(session.id, qIndex * 2),
+          _cycleTitle(blockSize, subjectName),
+          'How focused were you the past $cycleDurationMin min? Tap to log.',
           _local(cycleEnd),
           _details(
               channel: _sessionChannel(alarm),
               channelName: sessionChannelName,
               alarm: alarm),
           androidScheduleMode: AndroidScheduleMode.exactAllowWhileIdle,
-          payload: 'session_tick:${subject.id}',
+          payload: 'session_tick:${session.id}',
         );
       }
 
-      // Optional rest-start tick when pomodoro is on AND the rest slice
-      // is sane for this cycle (non-zero and shorter than the cycle).
       if (pomoOn) {
         final restMinutes = (cycleDurationMin * pomoPercent / 100).round();
         if (restMinutes > 0 && restMinutes < cycleDurationMin) {
@@ -325,16 +297,16 @@ class NotificationsService {
               cycleEnd.subtract(Duration(minutes: restMinutes));
           if (restStart.isAfter(now)) {
             await _plugin.zonedSchedule(
-              sessionTickId(block.id, dayKey, qIndex * 2 + 1),
-              'Rest now  ·  ${subject.name}',
-              'Take a $restMinutes min rest. Log will fire when rest ends.',
+              sessionTickId(session.id, qIndex * 2 + 1),
+              'Rest now  ·  $subjectName',
+              'Take a $restMinutes min rest. The log nudge will fire when rest ends.',
               _local(restStart),
               _details(
                   channel: _sessionChannel(alarm),
                   channelName: sessionChannelName,
                   alarm: alarm),
               androidScheduleMode: AndroidScheduleMode.exactAllowWhileIdle,
-              payload: 'session_tick:${subject.id}',
+              payload: 'session_tick:${session.id}',
             );
           }
         }

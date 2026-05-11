@@ -1,5 +1,7 @@
 import 'package:flutter/material.dart';
+import 'package:lucide_icons_flutter/lucide_icons.dart';
 
+import '../../models/models.dart';
 import '../../models/utilization.dart';
 import '../../theme/tokens.dart';
 import '../../theme/typography.dart';
@@ -17,13 +19,37 @@ String quarterLabel(int q, {int blockSizeMinutes = 15}) {
   return '$h:$m to $endH:$endM';
 }
 
-Future<Utilization?> showLogBlockSheet(
+/// Result of [showLogBlockSheet]. Carries the chosen utilization and the
+/// subject the user picked (or `null` for no subject). The caller writes
+/// these to all sub-quarters of the block.
+class LogBlockResult {
+  final Utilization utilization;
+  final String? subjectId;
+  final bool clearSubjectId;
+  const LogBlockResult({
+    required this.utilization,
+    required this.subjectId,
+    required this.clearSubjectId,
+  });
+}
+
+/// Render the "how focused were you?" sheet. [candidateSubjects] is the
+/// list of subjects to offer in the picker; when [autoPickedSubjectId]
+/// is non-null it pre-selects that subject (typically inferred from a
+/// focus session overlapping this block). Pass [askWhichSession] = true
+/// to highlight that multiple sessions overlap so the user picks
+/// deliberately.
+Future<LogBlockResult?> showLogBlockSheet(
   BuildContext context, {
   required Utilization current,
   required int quarterIndex,
   int blockSizeMinutes = 15,
+  List<Subject> candidateSubjects = const [],
+  String? currentSubjectId,
+  String? autoPickedSubjectId,
+  bool askWhichSession = false,
 }) {
-  return showModalBottomSheet<Utilization>(
+  return showModalBottomSheet<LogBlockResult>(
     context: context,
     isScrollControlled: true,
     backgroundColor: Theme.of(context).extension<AppTokens>()!.surface,
@@ -31,23 +57,47 @@ Future<Utilization?> showLogBlockSheet(
       current: current,
       quarterIndex: quarterIndex,
       blockSizeMinutes: blockSizeMinutes,
+      candidateSubjects: candidateSubjects,
+      initialSubjectId: autoPickedSubjectId ?? currentSubjectId,
+      askWhichSession: askWhichSession,
     ),
   );
 }
 
-class _LogSheet extends StatelessWidget {
+class _LogSheet extends StatefulWidget {
   final Utilization current;
   final int quarterIndex;
   final int blockSizeMinutes;
+  final List<Subject> candidateSubjects;
+  final String? initialSubjectId;
+  final bool askWhichSession;
   const _LogSheet({
     required this.current,
     required this.quarterIndex,
     required this.blockSizeMinutes,
+    required this.candidateSubjects,
+    required this.initialSubjectId,
+    required this.askWhichSession,
   });
 
-  String get _title => blockSizeMinutes == 60
-      ? 'Log this hour'
-      : (blockSizeMinutes == 30 ? 'Log this 30 min' : 'Log this 15 min');
+  @override
+  State<_LogSheet> createState() => _LogSheetState();
+}
+
+class _LogSheetState extends State<_LogSheet> {
+  String? _subjectId;
+
+  @override
+  void initState() {
+    super.initState();
+    _subjectId = widget.initialSubjectId;
+  }
+
+  String get _heading {
+    final size = widget.blockSizeMinutes;
+    final span = size == 60 ? 'hour' : '$size minutes';
+    return 'How focused were you the past $span?';
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -64,33 +114,128 @@ class _LogSheet extends StatelessWidget {
     return SafeArea(
       top: false,
       child: Padding(
-        padding: const EdgeInsets.fromLTRB(Sp.md, Sp.md, Sp.md, Sp.lg),
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Center(
-              child: Container(
-                width: 40,
-                height: 4,
-                decoration: BoxDecoration(
-                  color: t.divider,
-                  borderRadius: BorderRadius.circular(R.pill),
+        padding: EdgeInsets.only(
+          bottom: MediaQuery.of(context).viewInsets.bottom,
+        ),
+        child: SingleChildScrollView(
+          padding: const EdgeInsets.fromLTRB(Sp.md, Sp.md, Sp.md, Sp.lg),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Center(
+                child: Container(
+                  width: 40,
+                  height: 4,
+                  decoration: BoxDecoration(
+                    color: t.divider,
+                    borderRadius: BorderRadius.circular(R.pill),
+                  ),
                 ),
               ),
-            ),
-            const SizedBox(height: Sp.md),
-            Text(_title, style: AppText.headline.copyWith(color: t.ink)),
-            const SizedBox(height: 2),
-            Text(quarterLabel(quarterIndex, blockSizeMinutes: blockSizeMinutes),
-                style: AppText.label.copyWith(color: t.inkMuted)),
-            const SizedBox(height: Sp.md),
-            for (final u in options) _Row(
-              util: u,
-              selected: u == current,
-              onTap: () => Navigator.of(context).pop(u),
-            ),
-          ],
+              const SizedBox(height: Sp.md),
+              Text(_heading, style: AppText.headline.copyWith(color: t.ink)),
+              const SizedBox(height: 2),
+              Text(
+                quarterLabel(widget.quarterIndex,
+                    blockSizeMinutes: widget.blockSizeMinutes),
+                style: AppText.label.copyWith(color: t.inkMuted),
+              ),
+              const SizedBox(height: Sp.md),
+              if (widget.candidateSubjects.isNotEmpty) ...[
+                Row(
+                  children: [
+                    Text(
+                      widget.askWhichSession ? 'WHICH SESSION' : 'SUBJECT',
+                      style: Theme.of(context)
+                          .textTheme
+                          .labelSmall
+                          ?.copyWith(color: t.inkMuted),
+                    ),
+                    if (widget.askWhichSession) ...[
+                      const SizedBox(width: Sp.s),
+                      Icon(LucideIcons.triangleAlert,
+                          color: t.accent, size: 14),
+                    ],
+                  ],
+                ),
+                if (widget.askWhichSession) ...[
+                  const SizedBox(height: Sp.xs),
+                  Text(
+                    'Two or more sessions overlap this block. Tell us which one this belongs to.',
+                    style: AppText.label.copyWith(color: t.accent, fontSize: 12),
+                  ),
+                ],
+                const SizedBox(height: Sp.s),
+                Wrap(
+                  spacing: Sp.s,
+                  runSpacing: Sp.s,
+                  children: [
+                    _SubjectChip(
+                      label: 'No subject',
+                      selected: _subjectId == null,
+                      onTap: () => setState(() => _subjectId = null),
+                    ),
+                    for (final s in widget.candidateSubjects)
+                      _SubjectChip(
+                        label: s.name,
+                        selected: _subjectId == s.id,
+                        onTap: () => setState(() => _subjectId = s.id),
+                      ),
+                  ],
+                ),
+                const SizedBox(height: Sp.md),
+              ],
+              for (final u in options)
+                _Row(
+                  util: u,
+                  selected: u == widget.current,
+                  onTap: () => Navigator.of(context).pop(
+                    LogBlockResult(
+                      utilization: u,
+                      subjectId: _subjectId,
+                      clearSubjectId: _subjectId == null,
+                    ),
+                  ),
+                ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class _SubjectChip extends StatelessWidget {
+  final String label;
+  final bool selected;
+  final VoidCallback onTap;
+  const _SubjectChip({
+    required this.label,
+    required this.selected,
+    required this.onTap,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final t = context.tokens;
+    return InkWell(
+      onTap: onTap,
+      borderRadius: BorderRadius.circular(R.s),
+      child: Container(
+        padding:
+            const EdgeInsets.symmetric(horizontal: Sp.m, vertical: Sp.s),
+        decoration: BoxDecoration(
+          color: selected ? t.ink : t.surfaceAlt,
+          borderRadius: BorderRadius.circular(R.s),
+          border: Border.all(color: selected ? t.ink : t.divider),
+        ),
+        child: Text(
+          label,
+          style: AppText.bodyStrong.copyWith(
+            color: selected ? t.bg : t.ink,
+            fontSize: 13,
+          ),
         ),
       ),
     );

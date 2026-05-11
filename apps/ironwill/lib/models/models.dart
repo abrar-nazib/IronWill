@@ -214,25 +214,25 @@ class HabitDraft {
   }) : metadata = metadata ?? <String, Object?>{};
 }
 
-/// A "Subject" is the umbrella term for what the user is locking in on.
-/// It owns one or more [SubjectBlock]s scheduled across the week. The
-/// academic framing fits exam-prep users, but the term generalises to any
-/// time-bounded pursuit (workout, reading, side project).
+/// A "Subject" is the umbrella term for what the user is locking in on:
+/// "Math", "Workout", a side project. It's just a name + an order. The
+/// concrete time windows for working on that subject live on
+/// [FocusSession] rows (one-shot schedule with explicit start/end), not
+/// on a weekly recurrence template.
 ///
-/// Each subject carries an [expiresAt] date. A schedule decays after
-/// [LocalDb.defaultExpiryDays] from creation; the user extends with a
-/// "Repeat next week" action. After expiry the subject's blocks no longer
-/// fire reminders or count as active sessions.
+/// [expiresAt] is kept for now to drive the soft "schedule decays after a
+/// week" UX hint on the Subjects screen, but it no longer gates whether
+/// any session can run. The user can always start a session under any
+/// subject regardless of expiry.
 class Subject {
   final String id;
   final String name;
 
-  /// Inclusive: a subject is considered active on every day up to and
-  /// including this date. Stored as ISO `YYYY-MM-DD` in SQLite.
+  /// Soft expiry. Used for sorting and a "Repeat next week" affordance on
+  /// the subjects list. Does NOT prevent a focus session from running.
   final DateTime expiresAt;
   final DateTime createdAt;
   final int order;
-  final List<SubjectBlock> blocks;
 
   const Subject({
     required this.id,
@@ -240,10 +240,9 @@ class Subject {
     required this.expiresAt,
     required this.createdAt,
     required this.order,
-    this.blocks = const [],
   });
 
-  /// True if today is within (or before) the subject's expiry date.
+  /// True if today is within (or before) the subject's soft expiry date.
   bool isLiveOn(DateTime now) {
     final today = DateTime(now.year, now.month, now.day);
     final exp = DateTime(expiresAt.year, expiresAt.month, expiresAt.day);
@@ -254,7 +253,6 @@ class Subject {
     String? name,
     DateTime? expiresAt,
     int? order,
-    List<SubjectBlock>? blocks,
   }) =>
       Subject(
         id: id,
@@ -262,116 +260,136 @@ class Subject {
         expiresAt: expiresAt ?? this.expiresAt,
         createdAt: createdAt,
         order: order ?? this.order,
-        blocks: blocks ?? this.blocks,
       );
-}
-
-/// A single scheduled block inside a [Subject]. Multiple blocks can fall on
-/// the same weekday under different subjects, or even under the same subject
-/// (e.g. "Math at 9-10am AND 4-5pm both on Monday").
-class SubjectBlock {
-  final String id;
-  final String subjectId;
-
-  /// 1 = Monday, 7 = Sunday (matches [DateTime.weekday]).
-  final int dayOfWeek;
-  final TimeOfDay start;
-  final TimeOfDay end;
-  final bool pomodoroEnabled;
-
-  /// Percentage of the block's duration reserved as a pomodoro rest at the
-  /// end. Default 15%. Clamped 5..50 in the editor.
-  final int pomodoroPercent;
-
-  const SubjectBlock({
-    required this.id,
-    required this.subjectId,
-    required this.dayOfWeek,
-    required this.start,
-    required this.end,
-    this.pomodoroEnabled = false,
-    this.pomodoroPercent = 15,
-  });
-
-  int get startMinute => start.hour * 60 + start.minute;
-  int get endMinute => end.hour * 60 + end.minute;
-  int get durationMinutes => endMinute - startMinute;
-
-  SubjectBlock copyWith({
-    int? dayOfWeek,
-    TimeOfDay? start,
-    TimeOfDay? end,
-    bool? pomodoroEnabled,
-    int? pomodoroPercent,
-  }) =>
-      SubjectBlock(
-        id: id,
-        subjectId: subjectId,
-        dayOfWeek: dayOfWeek ?? this.dayOfWeek,
-        start: start ?? this.start,
-        end: end ?? this.end,
-        pomodoroEnabled: pomodoroEnabled ?? this.pomodoroEnabled,
-        pomodoroPercent: pomodoroPercent ?? this.pomodoroPercent,
-      );
-}
-
-class SubjectBlockDraft {
-  int dayOfWeek;
-  TimeOfDay start;
-  TimeOfDay end;
-  bool pomodoroEnabled;
-  int pomodoroPercent;
-  SubjectBlockDraft({
-    required this.dayOfWeek,
-    required this.start,
-    required this.end,
-    this.pomodoroEnabled = false,
-    this.pomodoroPercent = 15,
-  });
 }
 
 class SubjectDraft {
   String name;
   DateTime expiresAt;
-  List<SubjectBlockDraft> blocks;
   SubjectDraft({
     this.name = '',
     required this.expiresAt,
-    this.blocks = const [],
   });
 }
 
-/// A live focus block: the subject context, the block being run, and the
-/// concrete start/end [DateTime]s on the current day. Returned by
-/// [currentlyActiveBlock] when "now" falls inside a non-expired subject's
-/// scheduled block.
-class ActiveBlock {
-  final Subject subject;
-  final SubjectBlock block;
+/// Derived status of a [FocusSession] relative to a moment in time.
+enum FocusSessionStatus { pending, active, done }
+
+/// One concrete time window during which the user committed to focus.
+/// Replaces the old weekly-recurring [SubjectBlock] model: the user
+/// schedules a session with explicit start and end DateTimes, optionally
+/// under a Subject. A recurring "every Mon/Wed/Fri 9-10" is implemented
+/// as N FocusSession rows from the frontend, not as one row with a
+/// recurrence rule. The collision check is enforced at the repo layer.
+class FocusSession {
+  final String id;
+
+  /// Optional. A session can stand alone (just "focus from 9-10") or be
+  /// attributed to a subject (`Math`, `Workout`). When non-null, time
+  /// blocks logged inside this session inherit the subject id.
+  final String? subjectId;
   final DateTime startAt;
   final DateTime endAt;
-  const ActiveBlock({
-    required this.subject,
-    required this.block,
+  final DateTime createdAt;
+
+  const FocusSession({
+    required this.id,
+    required this.subjectId,
+    required this.startAt,
+    required this.endAt,
+    required this.createdAt,
+  });
+
+  Duration get duration => endAt.difference(startAt);
+  int get durationMinutes => duration.inMinutes;
+
+  FocusSessionStatus statusAt(DateTime now) {
+    if (now.isBefore(startAt)) return FocusSessionStatus.pending;
+    if (now.isBefore(endAt)) return FocusSessionStatus.active;
+    return FocusSessionStatus.done;
+  }
+
+  /// True iff [now] falls inside [startAt, endAt).
+  bool isActiveAt(DateTime now) =>
+      !now.isBefore(startAt) && now.isBefore(endAt);
+
+  /// True iff [otherStart, otherEnd) overlaps with this session's window.
+  /// Touching boundaries (one ends exactly when the next starts) do NOT
+  /// count as overlap, so back-to-back sessions are allowed.
+  bool overlapsWith(DateTime otherStart, DateTime otherEnd) =>
+      otherStart.isBefore(endAt) && startAt.isBefore(otherEnd);
+
+  FocusSession copyWith({
+    String? subjectId,
+    bool clearSubjectId = false,
+    DateTime? startAt,
+    DateTime? endAt,
+  }) =>
+      FocusSession(
+        id: id,
+        subjectId: clearSubjectId ? null : (subjectId ?? this.subjectId),
+        startAt: startAt ?? this.startAt,
+        endAt: endAt ?? this.endAt,
+        createdAt: createdAt,
+      );
+}
+
+class FocusSessionDraft {
+  String? subjectId;
+  DateTime startAt;
+  DateTime endAt;
+  FocusSessionDraft({
+    this.subjectId,
     required this.startAt,
     required this.endAt,
   });
+
+  Duration get duration => endAt.difference(startAt);
 }
 
-/// Find the (single) block currently active across all subjects, if any.
-/// Skips expired subjects so stale schedules don't fire reminders.
-/// Picks the first block whose [startAt, endAt) range contains [now].
-ActiveBlock? currentlyActiveBlock(List<Subject> subjects, DateTime now) {
-  final today = DateTime(now.year, now.month, now.day);
-  for (final s in subjects) {
-    if (!s.isLiveOn(now)) continue;
-    for (final b in s.blocks) {
-      if (b.dayOfWeek != now.weekday) continue;
-      final start = today.add(Duration(hours: b.start.hour, minutes: b.start.minute));
-      final end = today.add(Duration(hours: b.end.hour, minutes: b.end.minute));
-      if (!now.isBefore(start) && now.isBefore(end)) {
-        return ActiveBlock(subject: s, block: b, startAt: start, endAt: end);
-      }
+/// A live focus session at the current moment. Returned by
+/// [currentlyActiveSession] when "now" falls inside the [startAt, endAt)
+/// window of any session.
+class ActiveSession {
+  final FocusSession session;
+
+  /// May be null when the session was created without a subject. The UI
+  /// renders "Focus" in that case instead of a subject name.
+  final Subject? subject;
+  final DateTime startAt;
+  final DateTime endAt;
+  const ActiveSession({
+    required this.session,
+    required this.subject,
+    required this.startAt,
+    required this.endAt,
+  });
+
+  String get displayName => subject?.name ?? 'Focus session';
+}
+
+/// Find the (single) session currently active, if any. Picks the first
+/// session whose [startAt, endAt) contains [now]; in practice the repo
+/// collision check guarantees at most one is live at a time.
+ActiveSession? currentlyActiveSession(
+  List<FocusSession> sessions,
+  List<Subject> subjects,
+  DateTime now,
+) {
+  for (final s in sessions) {
+    if (s.isActiveAt(now)) {
+      final subject = s.subjectId == null
+          ? null
+          : subjects.cast<Subject?>().firstWhere(
+                (x) => x?.id == s.subjectId,
+                orElse: () => null,
+              );
+      return ActiveSession(
+        session: s,
+        subject: subject,
+        startAt: s.startAt,
+        endAt: s.endAt,
+      );
     }
   }
   return null;
@@ -381,8 +399,17 @@ class DayBlocks {
   final DateTime date;
   final List<Utilization> quarters;
 
-  const DayBlocks({required this.date, required this.quarters})
-      : assert(quarters.length == 96 || quarters.length == 0);
+  /// Parallel array to [quarters]. `subjectIds[q]` is the subject this
+  /// quarter was attributed to at log time, or null when the quarter is
+  /// unlogged / wasn't tagged. Empty list means "no subject info known"
+  /// (older code paths that didn't populate it).
+  final List<String?> subjectIds;
+
+  const DayBlocks({
+    required this.date,
+    required this.quarters,
+    this.subjectIds = const [],
+  }) : assert(quarters.length == 96 || quarters.length == 0);
 
   int get focusedMinutes => _weightedFocusedMinutes(quarters);
 
@@ -554,14 +581,11 @@ class DashboardStats {
   });
 }
 
-/// Per-subject focus breakdown used inside [WeeklyStats]. Lets the Stats
-/// screen show how minutes are distributed across the user's subjects so
-/// they can see which one is pulling its weight in any period.
-///
-/// Attribution is schedule-based: a logged quarter is credited to a
-/// subject only when it falls inside that subject's scheduled block on
-/// the same weekday. Quarters outside any scheduled window are not
-/// attributed (they still count toward the global focused total).
+/// Per-subject focus breakdown used inside [WeeklyStats]. Attribution is
+/// tag-based: each logged quarter carries a nullable `subject_id` in
+/// `time_blocks`, set at log time from the active focus session (or
+/// picked manually). Quarters with no subject id are not attributed
+/// (they still count toward the global focused total).
 class SubjectStatsRow {
   final String id;
   final String name;
@@ -570,22 +594,17 @@ class SubjectStatsRow {
   /// 15 min, 75% → 11.25, etc. Same convention as [DayBlocks.focusedMinutes].
   final int focusedMinutes;
 
-  /// Total minutes of this subject's blocks that fell inside the period.
-  /// Equals "if every quarter were logged at 100%" — the ceiling.
-  final int scheduledMinutes;
-
-  /// Count of 15-min quarters inside scheduled blocks that have a
+  /// Count of 15-min quarters tagged with this subject that have a
   /// non-none, non-notFocus utilization stamp.
   final int loggedQuarters;
 
-  /// Avg utilization percent of LOGGED quarters in this subject's
-  /// scheduled windows (0..100). Null when nothing was logged.
+  /// Avg utilization percent of LOGGED quarters tagged with this subject
+  /// (0..100). Null when nothing was logged.
   final int? avgUtilizationPct;
   const SubjectStatsRow({
     required this.id,
     required this.name,
     required this.focusedMinutes,
-    required this.scheduledMinutes,
     required this.loggedQuarters,
     required this.avgUtilizationPct,
   });

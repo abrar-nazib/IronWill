@@ -51,6 +51,11 @@ class HabitsScreen extends StatelessWidget {
                     icon: const Icon(LucideIcons.archive),
                     onPressed: () => context.push('/settings/archived'),
                   ),
+                  IconButton(
+                    tooltip: 'Settings',
+                    icon: const Icon(LucideIcons.settings),
+                    onPressed: () => context.push('/settings'),
+                  ),
                   const SizedBox(width: Sp.s),
                 ],
               ),

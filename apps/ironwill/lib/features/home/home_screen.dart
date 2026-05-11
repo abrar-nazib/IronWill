@@ -14,6 +14,7 @@ import '../../widgets/quarter_grid.dart';
 import '../../widgets/streak_pill.dart';
 import '../habits/habit_edit_sheet.dart';
 import '../habits/habit_log_sheet.dart';
+import '../sessions/start_session_sheet.dart';
 import '../tracker/log_block_sheet.dart';
 import '../tracker/quarter_logger.dart';
 
@@ -219,17 +220,59 @@ Future<void> _logCurrentQuarter(BuildContext context) async {
     firstQuarterIndex: picked,
     stride: stride,
   );
+  // Carry the existing subject_id forward when re-logging.
+  String? existingSubjectId;
+  if (today.subjectIds.length == today.quarters.length &&
+      picked < today.subjectIds.length) {
+    existingSubjectId = today.subjectIds[picked];
+  }
+  // Subject inference from any focus session overlapping the chosen
+  // block. Same logic as in the tracker tab.
+  final blockStart = DateTime(
+      today.date.year, today.date.month, today.date.day, 0, 0, 0)
+      .add(Duration(minutes: picked * 15));
+  final blockEnd = blockStart.add(Duration(minutes: size));
+  final overlapping = svc.focusSessions.overlapping(blockStart, blockEnd);
+  final subjectsAll = svc.subjects.all.value;
+  final subjectsById = {for (final s in subjectsAll) s.id: s};
+  final candidates = <Subject>[];
+  final seen = <String>{};
+  String? autoPicked;
+  var distinct = 0;
+  for (final s in overlapping) {
+    if (s.subjectId == null) continue;
+    if (seen.add(s.subjectId!)) {
+      final subj = subjectsById[s.subjectId];
+      if (subj != null) {
+        candidates.add(subj);
+        distinct++;
+      }
+    }
+  }
+  if (candidates.isEmpty) candidates.addAll(subjectsAll);
+  if (distinct == 1) autoPicked = candidates.first.id;
+  final askWhich = distinct > 1;
   final result = await showLogBlockSheet(
     context,
     current: aggregated,
     quarterIndex: picked,
     blockSizeMinutes: size,
+    candidateSubjects: candidates,
+    currentSubjectId: existingSubjectId,
+    autoPickedSubjectId: autoPicked,
+    askWhichSession: askWhich,
   );
   if (result == null || !context.mounted) return;
   for (var i = 0; i < stride; i++) {
     final idx = picked + i;
     if (idx >= 96) break;
-    await svc.time.logQuarter(today.date, idx, result);
+    await svc.time.logQuarter(
+      today.date,
+      idx,
+      result.utilization,
+      subjectId: result.subjectId,
+      clearSubjectId: result.clearSubjectId,
+    );
   }
 }
 
@@ -299,9 +342,9 @@ class _LogTrayCard extends StatelessWidget {
             children: [
               Expanded(
                 child: OutlinedButton.icon(
-                  icon: const Icon(LucideIcons.calendarPlus),
-                  label: const Text('Add focus blocks'),
-                  onPressed: () => context.push('/settings/subjects'),
+                  icon: const Icon(LucideIcons.play),
+                  label: const Text('Start a focus session'),
+                  onPressed: () => showStartFocusSessionSheet(context),
                 ),
               ),
               const SizedBox(width: Sp.s),
@@ -370,14 +413,71 @@ class _UpNextCard extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final t = context.tokens;
-    return ValueListenableBuilder<List<Subject>>(
-      valueListenable: AppServices.of(context).subjects.all,
-      builder: (_, subjects, __) {
-        final upcoming = _nextUpcomingBlock(subjects, DateTime.now());
-        if (upcoming == null) {
+    final svc = AppServices.of(context);
+    return ValueListenableBuilder<List<FocusSession>>(
+      valueListenable: svc.focusSessions.all,
+      builder: (_, sessions, __) => ValueListenableBuilder<List<Subject>>(
+        valueListenable: svc.subjects.all,
+        builder: (_, subjects, __) {
+          final now = DateTime.now();
+          final upcoming = _nextSession(sessions, now);
+          if (upcoming == null) {
+            return AppCard(
+              padding: const EdgeInsets.all(Sp.md),
+              onTap: () => context.push('/settings/sessions'),
+              child: Row(
+                children: [
+                  Container(
+                    width: 44,
+                    height: 44,
+                    decoration: BoxDecoration(
+                      color: t.surfaceAlt,
+                      borderRadius: BorderRadius.circular(R.s),
+                      border: Border.all(color: t.divider),
+                    ),
+                    alignment: Alignment.center,
+                    child: Icon(LucideIcons.target, color: t.inkMuted, size: IconSize.m),
+                  ),
+                  const SizedBox(width: Sp.m),
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text('UP NEXT',
+                            style: Theme.of(context).textTheme.labelSmall?.copyWith(color: t.inkMuted)),
+                        const SizedBox(height: 2),
+                        Text('No sessions scheduled', style: AppText.title.copyWith(color: t.ink)),
+                        const SizedBox(height: 2),
+                        Text('Tap to plan one. Or start a session now from the Log tray below.',
+                            style: AppText.label.copyWith(color: t.inkMuted)),
+                      ],
+                    ),
+                  ),
+                  Icon(LucideIcons.chevronRight, color: t.inkMuted, size: IconSize.l),
+                ],
+              ),
+            );
+          }
+          final subj = upcoming.subjectId == null
+              ? null
+              : subjects
+                  .cast<Subject?>()
+                  .firstWhere((s) => s?.id == upcoming.subjectId,
+                      orElse: () => null);
+          final name = subj?.name ?? 'Focus session';
+          final timeLabel =
+              '${upcoming.startAt.hour.toString().padLeft(2, '0')}:${upcoming.startAt.minute.toString().padLeft(2, '0')}';
+          final isToday = upcoming.startAt.day == now.day &&
+              upcoming.startAt.month == now.month &&
+              upcoming.startAt.year == now.year;
+          final isTomorrow = upcoming.startAt.day == now.day + 1 &&
+              upcoming.startAt.month == now.month;
+          final dayLabel = isToday
+              ? 'Today'
+              : (isTomorrow ? 'Tomorrow' : _weekdayName(upcoming.startAt.weekday));
           return AppCard(
             padding: const EdgeInsets.all(Sp.md),
-            onTap: () => context.go('/time'),
+            onTap: () => context.push('/settings/sessions'),
             child: Row(
               children: [
                 Container(
@@ -389,7 +489,7 @@ class _UpNextCard extends StatelessWidget {
                     border: Border.all(color: t.divider),
                   ),
                   alignment: Alignment.center,
-                  child: Icon(LucideIcons.target, color: t.inkMuted, size: IconSize.m),
+                  child: Icon(LucideIcons.target, color: t.ink, size: IconSize.m),
                 ),
                 const SizedBox(width: Sp.m),
                 Expanded(
@@ -399,9 +499,9 @@ class _UpNextCard extends StatelessWidget {
                       Text('UP NEXT',
                           style: Theme.of(context).textTheme.labelSmall?.copyWith(color: t.inkMuted)),
                       const SizedBox(height: 2),
-                      Text('No subjects scheduled', style: AppText.title.copyWith(color: t.ink)),
+                      Text(name, style: AppText.title.copyWith(color: t.ink)),
                       const SizedBox(height: 2),
-                      Text('Add focus blocks under a subject to fill your week.',
+                      Text('$dayLabel $timeLabel  ·  ${upcoming.durationMinutes} min planned',
                           style: AppText.label.copyWith(color: t.inkMuted)),
                     ],
                   ),
@@ -410,88 +510,23 @@ class _UpNextCard extends StatelessWidget {
               ],
             ),
           );
-        }
-        final block = upcoming.block;
-        final timeLabel =
-            '${block.start.hour.toString().padLeft(2, '0')}:${block.start.minute.toString().padLeft(2, '0')}';
-        final dayLabel = upcoming.isToday ? 'Today' : _weekdayName(block.dayOfWeek);
-        return AppCard(
-          padding: const EdgeInsets.all(Sp.md),
-          onTap: () => context.go('/time'),
-          child: Row(
-            children: [
-              Container(
-                width: 44,
-                height: 44,
-                decoration: BoxDecoration(
-                  color: t.surfaceAlt,
-                  borderRadius: BorderRadius.circular(R.s),
-                  border: Border.all(color: t.divider),
-                ),
-                alignment: Alignment.center,
-                child: Icon(LucideIcons.target, color: t.ink, size: IconSize.m),
-              ),
-              const SizedBox(width: Sp.m),
-              Expanded(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Text('UP NEXT',
-                        style: Theme.of(context).textTheme.labelSmall?.copyWith(color: t.inkMuted)),
-                    const SizedBox(height: 2),
-                    Text(upcoming.subject.name, style: AppText.title.copyWith(color: t.ink)),
-                    const SizedBox(height: 2),
-                    Text('$dayLabel $timeLabel  ·  ${block.durationMinutes} min planned',
-                        style: AppText.label.copyWith(color: t.inkMuted)),
-                  ],
-                ),
-              ),
-              Icon(LucideIcons.chevronRight, color: t.inkMuted, size: IconSize.l),
-            ],
-          ),
-        );
-      },
+        },
+      ),
     );
   }
 }
 
-class _UpcomingBlockHit {
-  final Subject subject;
-  final SubjectBlock block;
-  final bool isToday;
-  const _UpcomingBlockHit({
-    required this.subject,
-    required this.block,
-    required this.isToday,
-  });
-}
-
-/// Find the next non-expired block: prefer one that hasn't started today, then
-/// scan forward day by day for up to 7 days.
-_UpcomingBlockHit? _nextUpcomingBlock(List<Subject> subjects, DateTime now) {
-  final today = DateTime(now.year, now.month, now.day);
-  for (var off = 0; off < 7; off++) {
-    final day = today.add(Duration(days: off));
-    final dow = day.weekday;
-    _UpcomingBlockHit? best;
-    int? bestStartMin;
-    for (final s in subjects) {
-      if (!s.isLiveOn(day)) continue;
-      for (final b in s.blocks) {
-        if (b.dayOfWeek != dow) continue;
-        if (off == 0) {
-          final blockStart = day.add(Duration(hours: b.start.hour, minutes: b.start.minute));
-          if (!blockStart.isAfter(now)) continue;
-        }
-        if (bestStartMin == null || b.startMinute < bestStartMin) {
-          bestStartMin = b.startMinute;
-          best = _UpcomingBlockHit(subject: s, block: b, isToday: off == 0);
-        }
-      }
+/// Pick the next session that starts after [now], or returns the
+/// currently-active session if one is running.
+FocusSession? _nextSession(List<FocusSession> sessions, DateTime now) {
+  FocusSession? best;
+  for (final s in sessions) {
+    if (s.endAt.isBefore(now)) continue;
+    if (best == null || s.startAt.isBefore(best.startAt)) {
+      best = s;
     }
-    if (best != null) return best;
   }
-  return null;
+  return best;
 }
 
 const List<String> _weekdayNames = [

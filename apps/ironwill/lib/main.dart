@@ -37,11 +37,13 @@ void main() async {
     FocusSessionForegroundController.init();
     await services.notifications.rescheduleAll(
       habits: services.habits.all.value,
+      sessions: services.focusSessions.all.value,
       subjects: services.subjects.all.value,
       settings: services.settings.settings.value,
     );
     await FocusSessionForegroundController.reconcile(
-      services.subjects.all.value,
+      sessions: services.focusSessions.all.value,
+      subjects: services.subjects.all.value,
       settings: services.settings.settings.value,
     );
   }
@@ -86,11 +88,13 @@ class _LockedInAppState extends State<LockedInApp> with WidgetsBindingObserver {
       _reconcileTicker = Timer.periodic(const Duration(seconds: 30), (_) async {
         await widget.services.notifications.rescheduleAll(
           habits: widget.services.habits.all.value,
+          sessions: widget.services.focusSessions.all.value,
           subjects: widget.services.subjects.all.value,
           settings: widget.services.settings.settings.value,
         );
         await FocusSessionForegroundController.reconcile(
-          widget.services.subjects.all.value,
+          sessions: widget.services.focusSessions.all.value,
+          subjects: widget.services.subjects.all.value,
           settings: widget.services.settings.settings.value,
         );
       });
@@ -128,11 +132,13 @@ class _LockedInAppState extends State<LockedInApp> with WidgetsBindingObserver {
     if (state == AppLifecycleState.resumed) {
       widget.services.notifications.rescheduleAll(
         habits: widget.services.habits.all.value,
+        sessions: widget.services.focusSessions.all.value,
         subjects: widget.services.subjects.all.value,
         settings: widget.services.settings.settings.value,
       );
       FocusSessionForegroundController.reconcile(
-        widget.services.subjects.all.value,
+        sessions: widget.services.focusSessions.all.value,
+        subjects: widget.services.subjects.all.value,
         settings: widget.services.settings.settings.value,
       );
     }

@@ -48,35 +48,38 @@ class _ActiveSessionTimerState extends State<ActiveSessionTimer> {
   @override
   Widget build(BuildContext context) {
     final svc = AppServices.of(context);
-    return ValueListenableBuilder<List<Subject>>(
-      valueListenable: svc.subjects.all,
-      builder: (_, subjects, __) => ValueListenableBuilder<AppSettings>(
-        valueListenable: svc.settings.settings,
-        builder: (_, settings, __) {
-          final active = currentlyActiveBlock(subjects, _now);
-          if (active == null) return const SizedBox.shrink();
-          final timing = computeBlockTiming(
-            active,
-            _now,
-            blockSizeMinutes: settings.blockSizeMinutes,
-            pomodoroEnabled: settings.pomodoroEnabled,
-            pomodoroPercent: settings.pomodoroPercent,
-          );
-          return _Header(
-            active: active,
-            timing: timing,
-            onTap: () => _openFloating(context, active),
-          );
-        },
+    return ValueListenableBuilder<List<FocusSession>>(
+      valueListenable: svc.focusSessions.all,
+      builder: (_, sessions, __) => ValueListenableBuilder<List<Subject>>(
+        valueListenable: svc.subjects.all,
+        builder: (_, subjects, __) => ValueListenableBuilder<AppSettings>(
+          valueListenable: svc.settings.settings,
+          builder: (_, settings, __) {
+            final active = currentlyActiveSession(sessions, subjects, _now);
+            if (active == null) return const SizedBox.shrink();
+            final timing = computeBlockTiming(
+              active,
+              _now,
+              blockSizeMinutes: settings.blockSizeMinutes,
+              pomodoroEnabled: settings.pomodoroEnabled,
+              pomodoroPercent: settings.pomodoroPercent,
+            );
+            return _Header(
+              active: active,
+              timing: timing,
+              onTap: () => _openFloating(context, active),
+            );
+          },
+        ),
       ),
     );
   }
 
-  Future<void> _openFloating(BuildContext context, ActiveBlock active) async {
+  Future<void> _openFloating(BuildContext context, ActiveSession active) async {
     await showDialog<void>(
       context: context,
       barrierDismissible: true,
-      builder: (_) => _FloatingTimerDialog(blockId: active.block.id),
+      builder: (_) => _FloatingTimerDialog(sessionId: active.session.id),
     );
   }
 }
@@ -133,7 +136,7 @@ class BlockTiming {
 ///   * [BlockTiming.toNextRest] — until rest starts inside the current
 ///     cycle, or null when pomodoro is off / already inside rest.
 BlockTiming computeBlockTiming(
-  ActiveBlock active,
+  ActiveSession active,
   DateTime now, {
   int blockSizeMinutes = 15,
   bool pomodoroEnabled = false,
@@ -205,7 +208,7 @@ String _ms(Duration d) {
 }
 
 class _Header extends StatelessWidget {
-  final ActiveBlock active;
+  final ActiveSession active;
   final BlockTiming timing;
   final VoidCallback onTap;
   const _Header({
@@ -258,7 +261,7 @@ class _Header extends StatelessWidget {
                   mainAxisSize: MainAxisSize.min,
                   children: [
                     Text(
-                      active.subject.name,
+                      active.displayName,
                       style: AppText.bodyStrong.copyWith(
                         color: pillFg,
                         fontSize: 13,
@@ -313,8 +316,8 @@ class _Header extends StatelessWidget {
 }
 
 class _FloatingTimerDialog extends StatefulWidget {
-  final String blockId;
-  const _FloatingTimerDialog({required this.blockId});
+  final String sessionId;
+  const _FloatingTimerDialog({required this.sessionId});
 
   @override
   State<_FloatingTimerDialog> createState() => _FloatingTimerDialogState();
@@ -361,13 +364,15 @@ class _FloatingTimerDialogState extends State<_FloatingTimerDialog> {
       backgroundColor: t.bg,
       insetPadding: const EdgeInsets.all(Sp.m),
       shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(R.m)),
-      child: ValueListenableBuilder<List<Subject>>(
-        valueListenable: svc.subjects.all,
-        builder: (_, subjects, __) => ValueListenableBuilder<AppSettings>(
-          valueListenable: svc.settings.settings,
-          builder: (_, settings, __) {
-            final active = currentlyActiveBlock(subjects, _now);
-            if (active == null || active.block.id != widget.blockId) {
+      child: ValueListenableBuilder<List<FocusSession>>(
+        valueListenable: svc.focusSessions.all,
+        builder: (_, sessions, __) => ValueListenableBuilder<List<Subject>>(
+          valueListenable: svc.subjects.all,
+          builder: (_, subjects, ___) => ValueListenableBuilder<AppSettings>(
+            valueListenable: svc.settings.settings,
+            builder: (_, settings, ____) {
+              final active = currentlyActiveSession(sessions, subjects, _now);
+              if (active == null || active.session.id != widget.sessionId) {
               WidgetsBinding.instance.addPostFrameCallback((_) {
                 if (mounted) Navigator.of(context).pop();
               });
@@ -398,7 +403,7 @@ class _FloatingTimerDialogState extends State<_FloatingTimerDialog> {
                     children: [
                       Expanded(
                         child: Text(
-                          active.subject.name,
+                          active.displayName,
                           style: AppText.headline.copyWith(color: t.ink),
                           overflow: TextOverflow.ellipsis,
                         ),
@@ -467,7 +472,8 @@ class _FloatingTimerDialogState extends State<_FloatingTimerDialog> {
                 ],
               ),
             );
-          },
+            },
+          ),
         ),
       ),
     );

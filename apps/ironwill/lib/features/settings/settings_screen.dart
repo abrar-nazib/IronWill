@@ -55,9 +55,15 @@ class SettingsScreen extends StatelessWidget {
                 onTap: () => svc.settings.update(s.copyWith(reminderLogging: !s.reminderLogging)),
               ),
               _SimpleRow(
-                icon: LucideIcons.clockArrowUp,
-                label: 'Subjects and focus sessions',
-                trailing: 'Manage',
+                icon: LucideIcons.calendarClock,
+                label: 'Focus sessions',
+                trailing: 'Plan ahead',
+                onTap: () => context.push('/settings/sessions'),
+              ),
+              _SimpleRow(
+                icon: LucideIcons.bookmark,
+                label: 'Subjects',
+                trailing: 'Manage labels',
                 onTap: () => context.push('/settings/subjects'),
               ),
               _SimpleRow(

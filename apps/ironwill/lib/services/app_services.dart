@@ -18,6 +18,7 @@ class AppServices {
   final HabitsRepository habits;
   final TimeRepository time;
   final SubjectsRepository subjects;
+  final FocusSessionsRepository focusSessions;
   final StatsRepository stats;
   final ProfileRepository profile;
   final SettingsRepository settings;
@@ -28,6 +29,7 @@ class AppServices {
     required this.habits,
     required this.time,
     required this.subjects,
+    required this.focusSessions,
     required this.stats,
     required this.profile,
     required this.settings,
@@ -39,13 +41,20 @@ class AppServices {
   /// the platform cannot host SQLite (e.g. web).
   factory AppServices.mock() {
     final db = MockDb.instance;
+    final subjects = MockSubjectsRepository(db);
+    final focusSessions = MockFocusSessionsRepository(db);
+    final time = MockTimeRepository(db);
+    final habits = MockHabitsRepository(db);
+    final profile = MockProfileRepository(db);
+    final settings = MockSettingsRepository(db);
     return AppServices(
-      habits: MockHabitsRepository(db),
-      time: MockTimeRepository(db),
-      subjects: MockSubjectsRepository(db),
+      habits: habits,
+      time: time,
+      subjects: subjects,
+      focusSessions: focusSessions,
       stats: MockStatsRepository(db),
-      profile: MockProfileRepository(db),
-      settings: MockSettingsRepository(db),
+      profile: profile,
+      settings: settings,
       notifications: NotificationsService(),
     );
   }
@@ -55,14 +64,17 @@ class AppServices {
     final habits = SqliteHabitsRepository(ldb);
     final time = SqliteTimeRepository(ldb);
     final subjects = SqliteSubjectsRepository(ldb);
+    final focusSessions = SqliteFocusSessionsRepository(ldb);
     final profile = SqliteProfileRepository(ldb);
     final settings = SqliteSettingsRepository(ldb);
-    final stats = SqliteStatsRepository(habits, time, profile, subjects);
+    final stats =
+        SqliteStatsRepository(habits, time, profile, subjects, focusSessions);
     final notifications = NotificationsService();
     final services = AppServices(
       habits: habits,
       time: time,
       subjects: subjects,
+      focusSessions: focusSessions,
       stats: stats,
       profile: profile,
       settings: settings,
@@ -80,17 +92,20 @@ class AppServices {
       debounce = Timer(const Duration(milliseconds: 250), () async {
         await svc.notifications.rescheduleAll(
           habits: svc.habits.all.value,
+          sessions: svc.focusSessions.all.value,
           subjects: svc.subjects.all.value,
           settings: svc.settings.settings.value,
         );
         await FocusSessionForegroundController.reconcile(
-          svc.subjects.all.value,
+          sessions: svc.focusSessions.all.value,
+          subjects: svc.subjects.all.value,
           settings: svc.settings.settings.value,
         );
       });
     }
     svc.habits.all.addListener(reschedule);
     svc.subjects.all.addListener(reschedule);
+    svc.focusSessions.all.addListener(reschedule);
     svc.settings.settings.addListener(reschedule);
   }
 

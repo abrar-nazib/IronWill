@@ -381,7 +381,11 @@ class SqliteTimeRepository implements TimeRepository {
   SqliteTimeRepository(this._ldb, {DateTime Function()? now})
       : _now = now ?? DateTime.now,
         _today = ValueNotifier<DayBlocks>(
-          DayBlocks(date: truncate((now ?? DateTime.now)()), quarters: List.filled(96, Utilization.none)),
+          DayBlocks(
+            date: truncate((now ?? DateTime.now)()),
+            quarters: List.filled(96, Utilization.none),
+            subjectIds: List<String?>.filled(96, null),
+          ),
         ) {
     _refresh();
   }
@@ -403,12 +407,16 @@ class SqliteTimeRepository implements TimeRepository {
       whereArgs: [key],
     );
     final out = List<Utilization>.filled(96, Utilization.none);
+    final subs = List<String?>.filled(96, null);
     for (final r in rows) {
       final q = r['quarter'] as int;
       final u = r['utilization'] as int;
-      if (q >= 0 && q < 96) out[q] = Utilization.values[u];
+      if (q >= 0 && q < 96) {
+        out[q] = Utilization.values[u];
+        subs[q] = r['subject_id'] as String?;
+      }
     }
-    return DayBlocks(date: truncate(date), quarters: out);
+    return DayBlocks(date: truncate(date), quarters: out, subjectIds: subs);
   }
 
   @override
@@ -424,7 +432,13 @@ class SqliteTimeRepository implements TimeRepository {
   }
 
   @override
-  Future<void> logQuarter(DateTime date, int quarterIndex, Utilization u) async {
+  Future<void> logQuarter(
+    DateTime date,
+    int quarterIndex,
+    Utilization u, {
+    String? subjectId,
+    bool clearSubjectId = false,
+  }) async {
     final key = iso(truncate(date));
     if (u == Utilization.none) {
       await _ldb.db.delete(
@@ -433,9 +447,29 @@ class SqliteTimeRepository implements TimeRepository {
         whereArgs: [key, quarterIndex],
       );
     } else {
+      // Preserve any existing subject_id when neither override is set, so a
+      // re-log without re-picking a subject does not silently strip it.
+      String? finalSubjectId = subjectId;
+      if (finalSubjectId == null && !clearSubjectId) {
+        final existing = await _ldb.db.query(
+          'time_blocks',
+          columns: ['subject_id'],
+          where: 'date_iso = ? AND quarter = ?',
+          whereArgs: [key, quarterIndex],
+          limit: 1,
+        );
+        if (existing.isNotEmpty) {
+          finalSubjectId = existing.first['subject_id'] as String?;
+        }
+      }
       await _ldb.db.insert(
         'time_blocks',
-        {'date_iso': key, 'quarter': quarterIndex, 'utilization': u.index},
+        {
+          'date_iso': key,
+          'quarter': quarterIndex,
+          'utilization': u.index,
+          'subject_id': finalSubjectId,
+        },
         conflictAlgorithm: ConflictAlgorithm.replace,
       );
     }
@@ -454,23 +488,6 @@ class SqliteSubjectsRepository implements SubjectsRepository {
 
   Future<void> _refresh() async {
     final subjectRows = await _ldb.db.query('subjects', orderBy: 'ord ASC');
-    final blockRows = await _ldb.db.query('subject_blocks',
-        orderBy: 'day_of_week ASC, start_hour ASC, start_minute ASC');
-    final blocksBySubject = <String, List<SubjectBlock>>{};
-    for (final br in blockRows) {
-      final sid = br['subject_id'] as String;
-      blocksBySubject.putIfAbsent(sid, () => <SubjectBlock>[]).add(SubjectBlock(
-            id: br['id'] as String,
-            subjectId: sid,
-            dayOfWeek: br['day_of_week'] as int,
-            start: TimeOfDay(
-                hour: br['start_hour'] as int, minute: br['start_minute'] as int),
-            end: TimeOfDay(
-                hour: br['end_hour'] as int, minute: br['end_minute'] as int),
-            pomodoroEnabled: (br['pomodoro_enabled'] as int) == 1,
-            pomodoroPercent: br['pomodoro_percent'] as int,
-          ));
-    }
     _all.value = subjectRows
         .map((r) => Subject(
               id: r['id'] as String,
@@ -478,7 +495,6 @@ class SqliteSubjectsRepository implements SubjectsRepository {
               expiresAt: parseIso(r['expires_at'] as String),
               createdAt: DateTime.fromMillisecondsSinceEpoch(r['created_at'] as int),
               order: r['ord'] as int,
-              blocks: blocksBySubject[r['id'] as String] ?? const [],
             ))
         .toList();
   }
@@ -498,28 +514,12 @@ class SqliteSubjectsRepository implements SubjectsRepository {
     final orderRow = await _ldb.db.rawQuery('SELECT MAX(ord) AS m FROM subjects');
     final nextOrd = ((orderRow.first['m'] as int?) ?? -1) + 1;
     final nowMs = DateTime.now().millisecondsSinceEpoch;
-    await _ldb.db.transaction((txn) async {
-      await txn.insert('subjects', {
-        'id': id,
-        'name': draft.name.trim(),
-        'expires_at': iso(draft.expiresAt),
-        'created_at': nowMs,
-        'ord': nextOrd,
-      });
-      for (var i = 0; i < draft.blocks.length; i++) {
-        final b = draft.blocks[i];
-        await txn.insert('subject_blocks', {
-          'id': 'blk_${nowMs}_${i}_${b.dayOfWeek}',
-          'subject_id': id,
-          'day_of_week': b.dayOfWeek,
-          'start_hour': b.start.hour,
-          'start_minute': b.start.minute,
-          'end_hour': b.end.hour,
-          'end_minute': b.end.minute,
-          'pomodoro_enabled': b.pomodoroEnabled ? 1 : 0,
-          'pomodoro_percent': b.pomodoroPercent,
-        });
-      }
+    await _ldb.db.insert('subjects', {
+      'id': id,
+      'name': draft.name.trim(),
+      'expires_at': iso(draft.expiresAt),
+      'created_at': nowMs,
+      'ord': nextOrd,
     });
     await _refresh();
     return _all.value.firstWhere((s) => s.id == id);
@@ -538,51 +538,10 @@ class SqliteSubjectsRepository implements SubjectsRepository {
 
   @override
   Future<void> delete(String id) async {
-    // ON DELETE CASCADE on subject_blocks handles the children.
+    // ON DELETE SET NULL on focus_sessions.subject_id and
+    // time_blocks.subject_id keeps history intact when the user deletes a
+    // subject; attribution just goes away.
     await _ldb.db.delete('subjects', where: 'id = ?', whereArgs: [id]);
-    await _refresh();
-  }
-
-  @override
-  Future<SubjectBlock> addBlock(String subjectId, SubjectBlockDraft draft) async {
-    final nowMs = DateTime.now().microsecondsSinceEpoch;
-    final id = 'blk_${nowMs}_${draft.dayOfWeek}';
-    await _ldb.db.insert('subject_blocks', {
-      'id': id,
-      'subject_id': subjectId,
-      'day_of_week': draft.dayOfWeek,
-      'start_hour': draft.start.hour,
-      'start_minute': draft.start.minute,
-      'end_hour': draft.end.hour,
-      'end_minute': draft.end.minute,
-      'pomodoro_enabled': draft.pomodoroEnabled ? 1 : 0,
-      'pomodoro_percent': draft.pomodoroPercent,
-    });
-    await _refresh();
-    return _all.value
-        .firstWhere((s) => s.id == subjectId)
-        .blocks
-        .firstWhere((b) => b.id == id);
-  }
-
-  @override
-  Future<SubjectBlock> updateBlock(SubjectBlock block) async {
-    await _ldb.db.update('subject_blocks', {
-      'day_of_week': block.dayOfWeek,
-      'start_hour': block.start.hour,
-      'start_minute': block.start.minute,
-      'end_hour': block.end.hour,
-      'end_minute': block.end.minute,
-      'pomodoro_enabled': block.pomodoroEnabled ? 1 : 0,
-      'pomodoro_percent': block.pomodoroPercent,
-    }, where: 'id = ?', whereArgs: [block.id]);
-    await _refresh();
-    return block;
-  }
-
-  @override
-  Future<void> deleteBlock(String blockId) async {
-    await _ldb.db.delete('subject_blocks', where: 'id = ?', whereArgs: [blockId]);
     await _refresh();
   }
 
@@ -592,11 +551,141 @@ class SqliteSubjectsRepository implements SubjectsRepository {
     if (s == null) throw StateError('Subject $subjectId not found');
     final today = DateTime.now();
     final todayDate = DateTime(today.year, today.month, today.day);
-    // If already-expired, set the new expiry relative to today; otherwise extend
-    // from the current expiry so consecutive presses stack cleanly.
     final base = s.expiresAt.isBefore(todayDate) ? todayDate : s.expiresAt;
     final extended = base.add(Duration(days: LocalDb.defaultExpiryDays));
     return update(s.copyWith(expiresAt: extended));
+  }
+}
+
+class SqliteFocusSessionsRepository implements FocusSessionsRepository {
+  final LocalDb _ldb;
+  final ValueNotifier<List<FocusSession>> _all =
+      ValueNotifier<List<FocusSession>>([]);
+  SqliteFocusSessionsRepository(this._ldb) {
+    _refresh();
+  }
+
+  Future<void> _refresh() async {
+    final rows = await _ldb.db.query('focus_sessions', orderBy: 'start_at ASC');
+    _all.value = rows.map(_rowToSession).toList();
+  }
+
+  FocusSession _rowToSession(Map<String, Object?> r) => FocusSession(
+        id: r['id'] as String,
+        subjectId: r['subject_id'] as String?,
+        startAt: DateTime.fromMillisecondsSinceEpoch(r['start_at'] as int),
+        endAt: DateTime.fromMillisecondsSinceEpoch(r['end_at'] as int),
+        createdAt: DateTime.fromMillisecondsSinceEpoch(r['created_at'] as int),
+      );
+
+  @override
+  ValueListenable<List<FocusSession>> get all => _all;
+
+  @override
+  Future<List<FocusSession>> listAll() async => _all.value;
+
+  @override
+  Future<FocusSession?> getById(String id) async {
+    try {
+      return _all.value.firstWhere((s) => s.id == id);
+    } catch (_) {
+      return null;
+    }
+  }
+
+  @override
+  Future<List<FocusSession>> listInWindow(DateTime from, DateTime to) async {
+    // Half-open: [from, to). A session whose end_at lands exactly on `from`
+    // does not count.
+    final rows = await _ldb.db.query(
+      'focus_sessions',
+      where: 'end_at > ? AND start_at < ?',
+      whereArgs: [from.millisecondsSinceEpoch, to.millisecondsSinceEpoch],
+      orderBy: 'start_at ASC',
+    );
+    return rows.map(_rowToSession).toList();
+  }
+
+  @override
+  FocusSession? activeAt(DateTime now) {
+    for (final s in _all.value) {
+      if (s.isActiveAt(now)) return s;
+    }
+    return null;
+  }
+
+  @override
+  List<FocusSession> overlapping(DateTime start, DateTime end) {
+    final out = <FocusSession>[];
+    for (final s in _all.value) {
+      if (s.overlapsWith(start, end)) out.add(s);
+    }
+    return out;
+  }
+
+  /// Collision check used by create / update. Touching boundaries are
+  /// allowed (one ends where the next starts); only a strict interior
+  /// overlap counts. Returns the first conflicting session.
+  FocusSession? _findConflict(DateTime start, DateTime end, {String? excludeId}) {
+    for (final s in _all.value) {
+      if (excludeId != null && s.id == excludeId) continue;
+      if (start.isBefore(s.endAt) && s.startAt.isBefore(end)) return s;
+    }
+    return null;
+  }
+
+  @override
+  Future<FocusSession> create(FocusSessionDraft draft) async {
+    if (!draft.endAt.isAfter(draft.startAt)) {
+      throw ArgumentError(
+          'FocusSession end_at must be strictly after start_at.');
+    }
+    final conflict = _findConflict(draft.startAt, draft.endAt);
+    if (conflict != null) {
+      throw FocusSessionCollisionException(conflict);
+    }
+    final nowMs = DateTime.now().millisecondsSinceEpoch;
+    final id = 'fs_${DateTime.now().microsecondsSinceEpoch}';
+    await _ldb.db.insert('focus_sessions', {
+      'id': id,
+      'subject_id': draft.subjectId,
+      'start_at': draft.startAt.millisecondsSinceEpoch,
+      'end_at': draft.endAt.millisecondsSinceEpoch,
+      'created_at': nowMs,
+    });
+    await _refresh();
+    return _all.value.firstWhere((s) => s.id == id);
+  }
+
+  @override
+  Future<FocusSession> update(FocusSession session) async {
+    if (!session.endAt.isAfter(session.startAt)) {
+      throw ArgumentError(
+          'FocusSession end_at must be strictly after start_at.');
+    }
+    final conflict =
+        _findConflict(session.startAt, session.endAt, excludeId: session.id);
+    if (conflict != null) {
+      throw FocusSessionCollisionException(conflict);
+    }
+    await _ldb.db.update(
+      'focus_sessions',
+      {
+        'subject_id': session.subjectId,
+        'start_at': session.startAt.millisecondsSinceEpoch,
+        'end_at': session.endAt.millisecondsSinceEpoch,
+      },
+      where: 'id = ?',
+      whereArgs: [session.id],
+    );
+    await _refresh();
+    return _all.value.firstWhere((s) => s.id == session.id);
+  }
+
+  @override
+  Future<void> delete(String id) async {
+    await _ldb.db.delete('focus_sessions', where: 'id = ?', whereArgs: [id]);
+    await _refresh();
   }
 }
 
@@ -605,13 +694,15 @@ class SqliteStatsRepository implements StatsRepository {
   final TimeRepository _time;
   final ProfileRepository _profile;
   final SubjectsRepository _subjects;
+  final FocusSessionsRepository _sessions;
   final DateTime Function() _now;
   final ValueNotifier<int> _focusStreakDays = ValueNotifier<int>(0);
   SqliteStatsRepository(
     this._habits,
     this._time,
     this._profile,
-    this._subjects, {
+    this._subjects,
+    this._sessions, {
     DateTime Function()? now,
   }) : _now = now ?? DateTime.now {
     _time.today.addListener(_recomputeStreak);
@@ -674,10 +765,20 @@ class SqliteStatsRepository implements StatsRepository {
   }
 
   @override
-  Future<WeeklyStats> getWeekly() async {
+  Future<WeeklyStats> getWeekly() => getRange(StatsRange.week);
+
+  int _rangeDays(StatsRange r) => switch (r) {
+        StatsRange.week => 7,
+        StatsRange.month => 30,
+        StatsRange.year => 365,
+      };
+
+  @override
+  Future<WeeklyStats> getRange(StatsRange range) async {
     final today = truncate(_now());
+    final nDays = _rangeDays(range);
     final days = <DayBlocks>[];
-    for (int i = 6; i >= 0; i--) {
+    for (int i = nDays - 1; i >= 0; i--) {
       days.add(await _time.getDay(today.subtract(Duration(days: i))));
     }
     final mins = days.map((d) => d.focusedMinutes).toList();
@@ -731,7 +832,7 @@ class SqliteStatsRepository implements StatsRepository {
     final avgUtil = pctCount == 0 ? 0 : (pctSum / pctCount).round();
 
     // Minutes per hour-of-day (24 ints). 100% quarter = 15 min, 75% = 11.25,
-    // etc. Sum across all 7 days.
+    // etc. Sum across the whole period.
     final hourly = List<int>.filled(24, 0);
     for (final d in days) {
       for (var q = 0; q < d.quarters.length; q++) {
@@ -742,63 +843,60 @@ class SqliteStatsRepository implements StatsRepository {
       }
     }
 
-    // Unlogged focus quarters: quarters that fell in a scheduled block but
-    // were never stamped. Pull subjects to find scheduled windows.
+    // Unlogged focus quarters: quarters that fell inside a scheduled focus
+    // session but were never stamped. Walk focus_sessions overlapping the
+    // period; for each, count how many of its 15-min slots are still
+    // Utilization.none in the corresponding day.
     final allSubjects = await _subjects.listAll();
-    final blocksByDow = <int, List<({int startQ, int endQ})>>{};
-    for (final s in allSubjects) {
-      for (final b in s.blocks) {
-        final startQ = b.startMinute ~/ 15;
-        final endQ = b.endMinute ~/ 15;
-        (blocksByDow[b.dayOfWeek] ??= []).add((startQ: startQ, endQ: endQ));
-      }
-    }
+    final periodStart = days.first.date;
+    final periodEnd = days.last.date.add(const Duration(days: 1));
+    final periodSessions =
+        await _sessions.listInWindow(periodStart, periodEnd);
+    final daysByDate = {for (final d in days) d.date: d};
     var unlogged = 0;
-    for (final d in days) {
-      final ranges = blocksByDow[d.date.weekday] ?? const [];
-      for (final r in ranges) {
-        for (var q = r.startQ; q < r.endQ && q < 96; q++) {
-          if (d.quarters[q] == Utilization.none) unlogged++;
+    for (final s in periodSessions) {
+      // Iterate every quarter inside the session's window. A session that
+      // spans midnight is split across days here.
+      var cursor = s.startAt;
+      while (cursor.isBefore(s.endAt)) {
+        final day = DateTime(cursor.year, cursor.month, cursor.day);
+        final dayBlocks = daysByDate[day];
+        if (dayBlocks != null) {
+          final q = cursor.hour * 4 + (cursor.minute ~/ 15);
+          if (q >= 0 && q < 96 && dayBlocks.quarters[q] == Utilization.none) {
+            unlogged++;
+          }
         }
+        cursor = cursor.add(const Duration(minutes: 15));
       }
     }
 
-    // Per-subject focus rows. For each day in the period, walk the live
-    // subjects' blocks scheduled on that weekday and intersect with the
-    // logged quarters. Aggregate weighted minutes per subject id, then
-    // emit one row per subject that had at least one scheduled minute.
+    // Per-subject focus rows: pull straight off `time_blocks.subject_id`.
+    // No more schedule intersection: the user explicitly tagged each
+    // quarter (or it was auto-tagged from the active session), so the
+    // attribution is unambiguous.
     final subjFocus = <String, double>{};
-    final subjScheduled = <String, int>{};
     final subjLogged = <String, int>{};
     final subjPctSum = <String, int>{};
     final subjPctCount = <String, int>{};
     for (final d in days) {
-      for (final s in allSubjects) {
-        if (!s.isLiveOn(d.date)) continue;
-        for (final b in s.blocks) {
-          if (b.dayOfWeek != d.date.weekday) continue;
-          final startQ = (b.startMinute ~/ 15).clamp(0, 96);
-          final endQ = (b.endMinute ~/ 15).clamp(0, 96);
-          if (endQ <= startQ) continue;
-          subjScheduled.update(s.id, (v) => v + (endQ - startQ) * 15,
-              ifAbsent: () => (endQ - startQ) * 15);
-          for (var q = startQ; q < endQ; q++) {
-            final p = d.quarters[q].percent;
-            if (p == null) continue;
-            subjFocus.update(s.id, (v) => v + p * 15 / 100,
-                ifAbsent: () => p * 15 / 100);
-            subjLogged.update(s.id, (v) => v + 1, ifAbsent: () => 1);
-            subjPctSum.update(s.id, (v) => v + p, ifAbsent: () => p);
-            subjPctCount.update(s.id, (v) => v + 1, ifAbsent: () => 1);
-          }
-        }
+      if (d.subjectIds.length != d.quarters.length) continue;
+      for (var q = 0; q < d.quarters.length; q++) {
+        final p = d.quarters[q].percent;
+        if (p == null) continue;
+        final sid = d.subjectIds[q];
+        if (sid == null) continue;
+        subjFocus.update(sid, (v) => v + p * 15 / 100,
+            ifAbsent: () => p * 15 / 100);
+        subjLogged.update(sid, (v) => v + 1, ifAbsent: () => 1);
+        subjPctSum.update(sid, (v) => v + p, ifAbsent: () => p);
+        subjPctCount.update(sid, (v) => v + 1, ifAbsent: () => 1);
       }
     }
     final subjectRows = <SubjectStatsRow>[];
     for (final s in allSubjects) {
-      final scheduled = subjScheduled[s.id] ?? 0;
-      if (scheduled == 0) continue;
       final logged = subjLogged[s.id] ?? 0;
+      if (logged == 0) continue;
       final focused = (subjFocus[s.id] ?? 0).round();
       final pctCount = subjPctCount[s.id] ?? 0;
       final avgPct = pctCount == 0
@@ -808,19 +906,22 @@ class SqliteStatsRepository implements StatsRepository {
         id: s.id,
         name: s.name,
         focusedMinutes: focused,
-        scheduledMinutes: scheduled,
         loggedQuarters: logged,
         avgUtilizationPct: avgPct,
       ));
     }
+    subjectRows.sort((a, b) => b.focusedMinutes.compareTo(a.focusedMinutes));
 
-    // Per-habit hit / evaluated rows for the period (last 7 days).
+    // Per-habit hit / evaluated rows. For week we have 7 columns of
+    // last90; month/year we cap at 90 since that's the deepest the
+    // computed last90 goes. Good-enough until habit history is widened.
+    final habitWindow = nDays.clamp(1, 90);
     final habitRows = <HabitWeeklyRow>[];
     for (final h in habits) {
       var hit = 0;
       var seen = 0;
-      // last90 is indexed 0..89 oldest..newest. Take the last 7.
-      for (var i = h.last90.length - 7; i < h.last90.length; i++) {
+      for (var i = h.last90.length - habitWindow; i < h.last90.length; i++) {
+        if (i < 0) continue;
         final v = h.last90[i];
         if (v == Utilization.none || v == Utilization.notFocus) continue;
         seen++;

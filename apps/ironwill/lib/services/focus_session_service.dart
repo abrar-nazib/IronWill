@@ -1,6 +1,5 @@
 import 'dart:async';
 
-import 'package:flutter/material.dart' show TimeOfDay;
 import 'package:flutter_foreground_task/flutter_foreground_task.dart';
 
 import '../models/models.dart';
@@ -45,20 +44,21 @@ class FocusSessionForegroundController {
     _initialised = true;
   }
 
-  /// Reconcile the live state. If a non-expired subject's block is active
-  /// and the service is not running, start it. If no block is active and
-  /// the service is running, stop it. Idempotent on each call. After
-  /// start/update, the active block's start, end, the user's blockSize and
-  /// pomodoro settings are sent to the task isolate so its 1Hz tick
-  /// renders a live timer in the notification using the same math as the
-  /// in-app dialog.
-  static Future<void> reconcile(
-    List<Subject> subjects, {
+  /// Reconcile the live state. If a focus session is currently inside
+  /// its `[startAt, endAt)` window and the service is not running, start
+  /// it. If none is active and the service is running, stop it.
+  /// Idempotent on each call. After start/update, the active session's
+  /// start, end, subject name, blockSize and pomodoro settings are sent
+  /// to the task isolate so its 1Hz tick renders a live timer in the
+  /// notification using the same math as the in-app dialog.
+  static Future<void> reconcile({
+    required List<FocusSession> sessions,
+    required List<Subject> subjects,
     required AppSettings settings,
   }) async {
     init();
     final running = await FlutterForegroundTask.isRunningService;
-    final active = currentlyActiveBlock(subjects, DateTime.now());
+    final active = currentlyActiveSession(sessions, subjects, DateTime.now());
     if (active == null) {
       if (running) {
         await FlutterForegroundTask.stopService();
@@ -66,16 +66,17 @@ class FocusSessionForegroundController {
       return;
     }
     final initialBody = _renderBody(active, DateTime.now(), settings);
+    final title = 'Focus: ${active.displayName}';
     if (running) {
       await FlutterForegroundTask.updateService(
-        notificationTitle: 'Focus: ${active.subject.name}',
+        notificationTitle: title,
         notificationText: initialBody,
       );
     } else {
       await FlutterForegroundTask.startService(
         serviceId: _serviceId,
         serviceTypes: const [ForegroundServiceTypes.dataSync],
-        notificationTitle: 'Focus: ${active.subject.name}',
+        notificationTitle: title,
         notificationText: initialBody,
         notificationButtons: const [
           NotificationButton(id: 'log', text: 'Log block'),
@@ -86,7 +87,7 @@ class FocusSessionForegroundController {
     FlutterForegroundTask.sendDataToTask({
       'startMs': active.startAt.millisecondsSinceEpoch,
       'endMs': active.endAt.millisecondsSinceEpoch,
-      'name': active.subject.name,
+      'name': active.displayName,
       'blockSize': settings.blockSizeMinutes,
       'pomoOn': settings.pomodoroEnabled,
       'pomoPercent': settings.pomodoroPercent,
@@ -95,18 +96,15 @@ class FocusSessionForegroundController {
 
   /// Render the tray body using the same math as the in-app dialog so the
   /// numbers stay consistent across surfaces. Four formats:
-  ///   * before block start:     "Starts in MM:SS"
-  ///   * pomodoro off, in-block: "Total HH:MM:SS  ·  Log in MM:SS"
+  ///   * before session start:   "Starts in MM:SS"
+  ///   * pomodoro off, in-session: "Total HH:MM:SS  ·  Log in MM:SS"
   ///   * pomodoro on, focusing:  "Total HH:MM:SS  ·  Rest in MM:SS"
   ///   * pomodoro on, resting:   "Total HH:MM:SS  ·  Resting"
   static String _renderBody(
-    ActiveBlock active,
+    ActiveSession active,
     DateTime now,
     AppSettings settings,
   ) {
-    // Guard: block hasn't started yet. Without this, the in-block math
-    // produces a negative "since start" that mods to a meaningless "Log
-    // in" countdown, making the user believe the session is live.
     if (now.isBefore(active.startAt)) {
       final toStart = active.startAt.difference(now);
       return 'Starts in ${_ms(toStart)}';
@@ -199,26 +197,18 @@ class _FocusSessionTaskHandler extends TaskHandler {
       return;
     }
     // Synthesise the inputs the in-app math wants. The task isolate has
-    // no AppServices; ActiveBlock just needs startAt/endAt for the timer
-    // and stub Subject/SubjectBlock objects to satisfy the type.
-    final stubBlock = SubjectBlock(
+    // no AppServices; ActiveSession just needs startAt/endAt for the timer
+    // and a stub session/subject to satisfy the type.
+    final stubSession = FocusSession(
       id: 'fg',
-      subjectId: 'fg',
-      dayOfWeek: start.weekday,
-      start: TimeOfDay(hour: start.hour, minute: start.minute),
-      end: TimeOfDay(hour: end.hour, minute: end.minute),
-    );
-    final stubSubject = Subject(
-      id: 'fg',
-      name: _name,
-      expiresAt: end,
+      subjectId: null,
+      startAt: start,
+      endAt: end,
       createdAt: start,
-      order: 0,
-      blocks: [stubBlock],
     );
-    final active = ActiveBlock(
-      subject: stubSubject,
-      block: stubBlock,
+    final active = ActiveSession(
+      session: stubSession,
+      subject: null,
       startAt: start,
       endAt: end,
     );
