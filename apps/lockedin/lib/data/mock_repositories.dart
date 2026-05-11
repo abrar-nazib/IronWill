@@ -545,6 +545,41 @@ class MockStatsRepository implements StatsRepository {
       subjectRows: const [],
     );
   }
+
+  @override
+  Future<SubjectDetailStats?> getSubjectDetail(
+    String subjectId,
+    StatsRange range,
+  ) async {
+    final subject = _db.subjects.cast<Subject?>().firstWhere(
+          (s) => s?.id == subjectId,
+          orElse: () => null,
+        );
+    if (subject == null) return null;
+    final nDays = _rangeDays(range);
+    final today = _db.today;
+    final emptyDay = (DateTime d) => DayBlocks(
+          date: d,
+          quarters: List<Utilization>.filled(96, Utilization.none),
+          subjectIds: List<String?>.filled(96, null),
+        );
+    final days = <DayBlocks>[
+      for (int i = nDays - 1; i >= 0; i--)
+        emptyDay(DateTime(today.year, today.month, today.day - i)),
+    ];
+    return SubjectDetailStats(
+      id: subject.id,
+      name: subject.name,
+      days: days,
+      focusedMinutes: 0,
+      loggedQuarters: 0,
+      avgUtilizationPct: null,
+      hourlyMinutes: List<int>.filled(24, 0),
+      focusMinutesByDay: List<int>.filled(days.length, 0),
+      bestDayIndex: -1,
+      worstDayIndex: -1,
+    );
+  }
 }
 
 class MockProfileRepository implements ProfileRepository {

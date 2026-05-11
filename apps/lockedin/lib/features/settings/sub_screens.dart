@@ -799,7 +799,7 @@ class SubjectsScreen extends StatelessWidget {
           itemBuilder: (_, i) {
             if (i == 0) {
               return InkWell(
-                onTap: () => showSubjectEditSheet(context),
+                onTap: () => showSubjectEditSheet(context, showAdvancedOptions: true),
                 borderRadius: BorderRadius.circular(R.s),
                 child: Container(
                   padding: const EdgeInsets.all(Sp.md),
@@ -844,7 +844,11 @@ class SubjectsScreen extends StatelessWidget {
                 ? '$daysLeft day${daysLeft == 1 ? '' : 's'} left on soft expiry'
                 : 'Soft expiry passed ${-daysLeft}d ago';
             return AppCard(
-              onTap: () => showSubjectEditSheet(context, existing: s),
+              onTap: () => showSubjectEditSheet(
+                context,
+                existing: s,
+                showAdvancedOptions: true,
+              ),
               padding: const EdgeInsets.all(Sp.md),
               child: Row(
                 children: [

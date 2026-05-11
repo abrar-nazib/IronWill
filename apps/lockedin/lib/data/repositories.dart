@@ -131,6 +131,14 @@ abstract class StatsRepository {
   /// [WeeklyStats.days] list still contains 7 entries for week, 30 for
   /// month, etc.
   Future<WeeklyStats> getRange(StatsRange range);
+
+  /// Detail stats for one subject over the same period: only the
+  /// `time_blocks` rows tagged with this subject contribute. Returns
+  /// null when the subject is unknown.
+  Future<SubjectDetailStats?> getSubjectDetail(
+    String subjectId,
+    StatsRange range,
+  );
 }
 
 abstract class ProfileRepository {

@@ -954,6 +954,83 @@ class SqliteStatsRepository implements StatsRepository {
       subjectRows: subjectRows,
     );
   }
+
+  @override
+  Future<SubjectDetailStats?> getSubjectDetail(
+    String subjectId,
+    StatsRange range,
+  ) async {
+    final subject = await _subjects.getById(subjectId);
+    if (subject == null) return null;
+    final today = truncate(_now());
+    final nDays = _rangeDays(range);
+    final days = <DayBlocks>[];
+    final byDay = <int>[];
+    final hourly = List<int>.filled(24, 0);
+    var focused = 0.0;
+    var loggedQ = 0;
+    var pctSum = 0;
+    var pctCount = 0;
+    for (int i = nDays - 1; i >= 0; i--) {
+      final raw = await _time.getDay(today.subtract(Duration(days: i)));
+      // Mask: only quarters tagged with this subject keep their
+      // utilization; everything else becomes "none" so the renderers
+      // happily display a subject-only strip.
+      final maskedQuarters = List<Utilization>.filled(96, Utilization.none);
+      final maskedSubjects = List<String?>.filled(96, null);
+      var dayFocused = 0.0;
+      for (var q = 0; q < raw.quarters.length; q++) {
+        final sid = q < raw.subjectIds.length ? raw.subjectIds[q] : null;
+        if (sid != subjectId) continue;
+        maskedQuarters[q] = raw.quarters[q];
+        maskedSubjects[q] = sid;
+        final p = raw.quarters[q].percent;
+        if (p == null) continue;
+        final mins = p * 15 / 100;
+        focused += mins;
+        dayFocused += mins;
+        loggedQ++;
+        pctSum += p;
+        pctCount++;
+        hourly[q ~/ 4] += mins.round();
+      }
+      days.add(DayBlocks(
+        date: raw.date,
+        quarters: maskedQuarters,
+        subjectIds: maskedSubjects,
+      ));
+      byDay.add(dayFocused.round());
+    }
+    var bestIdx = -1;
+    var bestMin = -1;
+    var worstIdx = -1;
+    var worstMin = 1 << 30;
+    for (var i = 0; i < byDay.length; i++) {
+      final m = byDay[i];
+      if (m > bestMin) {
+        bestMin = m;
+        bestIdx = i;
+      }
+      if (m > 0 && m < worstMin) {
+        worstMin = m;
+        worstIdx = i;
+      }
+    }
+    if (bestMin == 0) bestIdx = -1;
+    return SubjectDetailStats(
+      id: subject.id,
+      name: subject.name,
+      days: days,
+      focusedMinutes: focused.round(),
+      loggedQuarters: loggedQ,
+      avgUtilizationPct:
+          pctCount == 0 ? null : (pctSum / pctCount).round(),
+      hourlyMinutes: hourly,
+      focusMinutesByDay: byDay,
+      bestDayIndex: bestIdx,
+      worstDayIndex: worstIdx,
+    );
+  }
 }
 
 class SqliteProfileRepository implements ProfileRepository {

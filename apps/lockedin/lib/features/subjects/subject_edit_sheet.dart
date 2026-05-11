@@ -8,24 +8,35 @@ import '../../services/app_services.dart';
 import '../../theme/tokens.dart';
 import '../../theme/typography.dart';
 
-/// Bottom-sheet editor for a [Subject]. v6 subjects are just an umbrella
-/// name plus a soft expiry hint; concrete time windows live on
-/// FocusSession rows scheduled separately. So this sheet only edits
-/// name + expiry + delete.
-///
-/// Pass `existing` to edit; omit to create.
-Future<Subject?> showSubjectEditSheet(BuildContext context, {Subject? existing}) {
+/// Bottom-sheet editor for a [Subject]. Subjects in v6 are just labels.
+/// The default sheet shows only the name field (and delete, when
+/// editing). The "soft expiry" advanced chrome (+1 week / -1 week /
+/// pick a date) only appears when [showAdvancedOptions] is true,
+/// reserved for the Settings entry point. Onboarding and inline
+/// "New subject" paths get a one-field form.
+Future<Subject?> showSubjectEditSheet(
+  BuildContext context, {
+  Subject? existing,
+  bool showAdvancedOptions = false,
+}) {
   return showModalBottomSheet<Subject?>(
     context: context,
     isScrollControlled: true,
     backgroundColor: context.tokens.surface,
-    builder: (ctx) => _SubjectEditSheet(existing: existing),
+    builder: (ctx) => _SubjectEditSheet(
+      existing: existing,
+      showAdvancedOptions: showAdvancedOptions,
+    ),
   );
 }
 
 class _SubjectEditSheet extends StatefulWidget {
   final Subject? existing;
-  const _SubjectEditSheet({this.existing});
+  final bool showAdvancedOptions;
+  const _SubjectEditSheet({
+    this.existing,
+    required this.showAdvancedOptions,
+  });
 
   @override
   State<_SubjectEditSheet> createState() => _SubjectEditSheetState();
@@ -161,7 +172,7 @@ class _SubjectEditSheetState extends State<_SubjectEditSheet> {
               ),
               const SizedBox(height: Sp.s),
               Text(
-                'Subjects are just labels. Plan concrete focus sessions under them from the home tab or Settings.',
+                'Subjects are just labels. Tag focus sessions and logged blocks with them so your time adds up by subject.',
                 style: AppText.label.copyWith(color: t.inkMuted),
               ),
               const SizedBox(height: Sp.md),
@@ -177,13 +188,15 @@ class _SubjectEditSheetState extends State<_SubjectEditSheet> {
                 style: AppText.body.copyWith(color: t.ink, fontSize: 16),
                 decoration: const InputDecoration(hintText: 'Mathematics'),
               ),
-              const SizedBox(height: Sp.lg),
-              _ExpiresRow(
-                expiresAt: _expiresAt,
-                onPick: _pickExpiresAt,
-                onRepeat: _repeatNextWeek,
-                onShrink: _shrinkOneWeek,
-              ),
+              if (widget.showAdvancedOptions) ...[
+                const SizedBox(height: Sp.lg),
+                _ExpiresRow(
+                  expiresAt: _expiresAt,
+                  onPick: _pickExpiresAt,
+                  onRepeat: _repeatNextWeek,
+                  onShrink: _shrinkOneWeek,
+                ),
+              ],
               const SizedBox(height: Sp.x3l),
               SizedBox(
                 width: double.infinity,
@@ -231,16 +244,21 @@ class _ExpiresRow extends StatelessWidget {
         .inDays;
     final dateLabel = DateFormat('EEE, d MMM').format(expiresAt);
     final hint = daysLeft >= 0
-        ? '$daysLeft day${daysLeft == 1 ? '' : 's'} left on this schedule'
-        : 'Expired ${-daysLeft} day${daysLeft == -1 ? '' : 's'} ago';
+        ? '$daysLeft day${daysLeft == 1 ? '' : 's'} left'
+        : 'Soft expiry passed ${-daysLeft}d ago';
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        Text('SOFT EXPIRY',
+        Text('SOFT EXPIRY (advanced)',
             style: Theme.of(context)
                 .textTheme
                 .labelSmall
                 ?.copyWith(color: t.inkMuted)),
+        const SizedBox(height: Sp.xs),
+        Text(
+          "Just a sort hint on the Subjects screen. Sessions can still run before or after this date.",
+          style: AppText.label.copyWith(color: t.inkMuted, fontSize: 11),
+        ),
         const SizedBox(height: Sp.s),
         InkWell(
           onTap: onPick,

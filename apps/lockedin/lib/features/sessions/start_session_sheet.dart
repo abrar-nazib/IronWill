@@ -43,6 +43,8 @@ class _StartSessionSheetState extends State<_StartSessionSheet> {
 
   bool get _isEditing => widget.existing != null;
 
+  bool _subjectInitDone = false;
+
   @override
   void initState() {
     super.initState();
@@ -50,6 +52,7 @@ class _StartSessionSheetState extends State<_StartSessionSheet> {
       _startAt = widget.existing!.startAt;
       _endAt = widget.existing!.endAt;
       _subjectId = widget.existing!.subjectId;
+      _subjectInitDone = true;
     } else {
       final now = DateTime.now();
       // Round up to the next 5-minute boundary so the default start is
@@ -58,8 +61,20 @@ class _StartSessionSheetState extends State<_StartSessionSheet> {
       _startAt = DateTime(now.year, now.month, now.day, now.hour, now.minute)
           .add(Duration(minutes: minutesToNext5));
       _endAt = _startAt.add(const Duration(minutes: 30));
-      _subjectId = _lastUsedSubjectId();
+      // _subjectId stays null here. AppServices.of(context) cannot be
+      // called from initState (dependOnInheritedWidgetOfExactType
+      // asserts), so the "last used subject" pre-pick happens once in
+      // didChangeDependencies below. Without this guard the sheet
+      // crashed when opened from onboarding.
     }
+  }
+
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    if (_subjectInitDone) return;
+    _subjectId = _lastUsedSubjectId();
+    _subjectInitDone = true;
   }
 
   /// Best-effort: pick the subject of the most-recently-created session

@@ -146,7 +146,7 @@ class _StatsScreenState extends State<StatsScreen> {
                       const SizedBox(height: Sp.m),
                       _PerHabitCard(stats: stats),
                       const SizedBox(height: Sp.m),
-                      _PerSubjectCard(stats: stats),
+                      _PerSubjectCard(stats: stats, range: _range),
                       const SizedBox(height: Sp.m),
                       _WeekGridCard(stats: stats),
                     ]),
@@ -654,7 +654,8 @@ class _HabitStatRow extends StatelessWidget {
 /// the dominant subject is at the top.
 class _PerSubjectCard extends StatelessWidget {
   final WeeklyStats stats;
-  const _PerSubjectCard({required this.stats});
+  final StatsRange range;
+  const _PerSubjectCard({required this.stats, required this.range});
 
   @override
   Widget build(BuildContext context) {
@@ -684,10 +685,18 @@ class _PerSubjectCard extends StatelessWidget {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          const SectionHeader('Focus by subject, last 7 days'),
+          SectionHeader(switch (range) {
+            StatsRange.week => 'Focus by subject, last 7 days',
+            StatsRange.month => 'Focus by subject, last 30 days',
+            StatsRange.year => 'Focus by subject, last 365 days',
+          }),
           for (var i = 0; i < sorted.length; i++) ...[
             if (i > 0) Divider(color: t.divider, height: Sp.m, thickness: 1),
-            _SubjectStatRow(row: sorted[i], maxFocus: maxFocus),
+            _SubjectStatRow(
+              row: sorted[i],
+              maxFocus: maxFocus,
+              range: range,
+            ),
           ],
         ],
       ),
@@ -698,7 +707,12 @@ class _PerSubjectCard extends StatelessWidget {
 class _SubjectStatRow extends StatelessWidget {
   final SubjectStatsRow row;
   final int maxFocus;
-  const _SubjectStatRow({required this.row, required this.maxFocus});
+  final StatsRange range;
+  const _SubjectStatRow({
+    required this.row,
+    required this.maxFocus,
+    required this.range,
+  });
 
   @override
   Widget build(BuildContext context) {
@@ -706,7 +720,10 @@ class _SubjectStatRow extends StatelessWidget {
     final ratio = (maxFocus == 0 ? 0.0 : row.focusedMinutes / maxFocus)
         .clamp(0.0, 1.0);
     final loggedMins = row.loggedQuarters * 15;
-    return Padding(
+    return InkWell(
+      onTap: () => context.push('/stats/subject/${row.id}?range=${range.name}'),
+      borderRadius: BorderRadius.circular(R.s),
+      child: Padding(
       padding: const EdgeInsets.symmetric(vertical: Sp.s),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
@@ -754,6 +771,9 @@ class _SubjectStatRow extends StatelessWidget {
                       style: AppText.label.copyWith(color: t.inkMuted)),
                 ],
               ),
+              const SizedBox(width: Sp.s),
+              Icon(LucideIcons.chevronRight,
+                  color: t.inkMuted, size: IconSize.s),
             ],
           ),
           const SizedBox(height: Sp.s),
@@ -767,6 +787,7 @@ class _SubjectStatRow extends StatelessWidget {
             ),
           ),
         ],
+      ),
       ),
     );
   }

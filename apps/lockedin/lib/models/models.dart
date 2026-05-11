@@ -632,6 +632,54 @@ class HabitWeeklyRow {
       evaluatedDays == 0 ? 0 : ((hitDays / evaluatedDays) * 100).round();
 }
 
+/// Detail data for one subject across a stats range. Produced by
+/// [StatsRepository.getSubjectDetail]. Only time_blocks tagged with
+/// this subject contribute. The detail screen reuses the existing
+/// QuarterGrid for the per-day strip by re-emitting DayBlocks where
+/// only this subject's quarters carry a utilization value.
+class SubjectDetailStats {
+  final String id;
+  final String name;
+
+  /// One DayBlocks per day in the range (ascending). Quarters that did
+  /// NOT belong to this subject are masked to [Utilization.none] so
+  /// the existing renderers show only this subject's slice.
+  final List<DayBlocks> days;
+
+  /// Weighted focus minutes contributed by this subject across the range.
+  final int focusedMinutes;
+
+  /// Count of 15-min quarters tagged with this subject.
+  final int loggedQuarters;
+
+  /// Average utilization percent of LOGGED quarters of this subject
+  /// (0..100). Null when nothing is logged in the range.
+  final int? avgUtilizationPct;
+
+  /// 24-bin hour-of-day minute distribution, restricted to this subject.
+  final List<int> hourlyMinutes;
+
+  /// Per-day weighted focus minutes (length == days.length).
+  final List<int> focusMinutesByDay;
+
+  /// Best / worst day indices into [days]. -1 when nothing logged.
+  final int bestDayIndex;
+  final int worstDayIndex;
+
+  const SubjectDetailStats({
+    required this.id,
+    required this.name,
+    required this.days,
+    required this.focusedMinutes,
+    required this.loggedQuarters,
+    required this.avgUtilizationPct,
+    required this.hourlyMinutes,
+    required this.focusMinutesByDay,
+    required this.bestDayIndex,
+    required this.worstDayIndex,
+  });
+}
+
 class WeeklyStats {
   final List<int> focusMinutesByDay;
   final List<DayBlocks> days;

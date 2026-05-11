@@ -2,6 +2,7 @@ import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:go_router/go_router.dart';
 
+import 'data/repositories.dart';
 import 'features/habits/habit_detail_screen.dart';
 import 'features/habits/habits_screen.dart';
 import 'features/home/home_screen.dart';
@@ -11,6 +12,7 @@ import 'features/settings/settings_screen.dart';
 import 'features/settings/sub_screens.dart';
 import 'features/shell/shell.dart';
 import 'features/stats/stats_screen.dart';
+import 'features/stats/subject_detail_screen.dart';
 import 'features/tracker/tracker_screen.dart';
 import 'models/models.dart';
 import 'services/app_services.dart';
@@ -58,6 +60,23 @@ GoRouter buildRouter(AppServices services) {
           GoRoute(
             path: '/stats',
             pageBuilder: (c, s) => const NoTransitionPage(child: StatsScreen()),
+            routes: [
+              GoRoute(
+                path: 'subject/:id',
+                parentNavigatorKey: _rootKey,
+                builder: (c, s) {
+                  final rangeName = s.uri.queryParameters['range'] ?? 'week';
+                  final range = StatsRange.values.firstWhere(
+                    (r) => r.name == rangeName,
+                    orElse: () => StatsRange.week,
+                  );
+                  return SubjectDetailScreen(
+                    subjectId: s.pathParameters['id']!,
+                    initialRange: range,
+                  );
+                },
+              ),
+            ],
           ),
         ],
       ),
